@@ -3,11 +3,12 @@
     "step": {
       "user": {
         "title": "Přidat tiskárnu",
-        "description": "Ke každé cívce ze Spoolman integrace se přidá tlačítko pro nastavení aktivního filamentu na této tiskárně. Pro každou další tiskárnu přidej integraci znovu s jiným Moonraker URL.",
+        "description": "Ke každé cívce ze Spoolman integrace se přidá tlačítko pro nastavení aktivního filamentu na této tiskárně a vznikne samostatný device s údaji o aktivní cívce. Pro každou další tiskárnu přidej integraci znovu s jiným Moonraker URL.",
         "data": {
           "name": "Název tiskárny",
           "moonraker_url": "URL Moonrakeru (např. http://192.168.1.50:7125)",
-          "verify_ssl": "Ověřovat SSL certifikát"
+          "verify_ssl": "Ověřovat SSL certifikát",
+          "poll_interval": "Interval kontroly aktivní cívky (sekundy)"
         }
       },
       "reconfigure": {
@@ -16,7 +17,8 @@
         "data": {
           "name": "Název tiskárny",
           "moonraker_url": "URL Moonrakeru (např. http://192.168.1.50:7125)",
-          "verify_ssl": "Ověřovat SSL certifikát"
+          "verify_ssl": "Ověřovat SSL certifikát",
+          "poll_interval": "Interval kontroly aktivní cívky (sekundy)"
         }
       }
     },

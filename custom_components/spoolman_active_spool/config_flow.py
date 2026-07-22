@@ -14,13 +14,17 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import NumberSelector, NumberSelectorConfig
 
 from .const import (
     CONF_MOONRAKER_URL,
     CONF_NAME,
+    CONF_POLL_INTERVAL,
     CONF_VERIFY_SSL,
+    DEFAULT_POLL_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    MIN_POLL_INTERVAL,
     REQUEST_TIMEOUT,
 )
 
@@ -44,6 +48,12 @@ def _connection_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
                 CONF_VERIFY_SSL,
                 default=defaults.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
             ): bool,
+            vol.Required(
+                CONF_POLL_INTERVAL,
+                default=defaults.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+            ): NumberSelector(
+                NumberSelectorConfig(min=MIN_POLL_INTERVAL, max=3600, step=1, unit_of_measurement="s")
+            ),
         }
     )
 
@@ -80,16 +90,20 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
             return {"base": "unknown"}
         return {}
 
+    @staticmethod
+    def _coerce(user_input: dict[str, Any]) -> dict[str, Any]:
+        user_input[CONF_NAME] = user_input[CONF_NAME].strip()
+        user_input[CONF_MOONRAKER_URL] = _normalize_url(user_input[CONF_MOONRAKER_URL])
+        user_input[CONF_POLL_INTERVAL] = int(user_input[CONF_POLL_INTERVAL])
+        return user_input
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            user_input[CONF_NAME] = user_input[CONF_NAME].strip()
-            user_input[CONF_MOONRAKER_URL] = _normalize_url(
-                user_input[CONF_MOONRAKER_URL]
-            )
+            user_input = self._coerce(user_input)
             errors = await self._async_try_connect(user_input)
             if not errors:
                 await self.async_set_unique_id(
@@ -101,6 +115,7 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_MOONRAKER_URL: user_input[CONF_MOONRAKER_URL],
                         CONF_VERIFY_SSL: user_input[CONF_VERIFY_SSL],
+                        CONF_POLL_INTERVAL: user_input[CONF_POLL_INTERVAL],
                     },
                 )
 
@@ -111,15 +126,12 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Change the printer's name, Moonraker URL, or SSL verification."""
+        """Change the printer's name, Moonraker URL, SSL verification or poll interval."""
         errors: dict[str, str] = {}
         reconfigure_entry = self._get_reconfigure_entry()
 
         if user_input is not None:
-            user_input[CONF_NAME] = user_input[CONF_NAME].strip()
-            user_input[CONF_MOONRAKER_URL] = _normalize_url(
-                user_input[CONF_MOONRAKER_URL]
-            )
+            user_input = self._coerce(user_input)
             errors = await self._async_try_connect(user_input)
             if not errors:
                 await self.async_set_unique_id(
@@ -132,6 +144,7 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_MOONRAKER_URL: user_input[CONF_MOONRAKER_URL],
                         CONF_VERIFY_SSL: user_input[CONF_VERIFY_SSL],
+                        CONF_POLL_INTERVAL: user_input[CONF_POLL_INTERVAL],
                     },
                 )
 
@@ -143,6 +156,9 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_MOONRAKER_URL: reconfigure_entry.data[CONF_MOONRAKER_URL],
                     CONF_VERIFY_SSL: reconfigure_entry.data.get(
                         CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL
+                    ),
+                    CONF_POLL_INTERVAL: reconfigure_entry.data.get(
+                        CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
                     ),
                 }
             ),
