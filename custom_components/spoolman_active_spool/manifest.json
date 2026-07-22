@@ -1,0 +1,12 @@
+{
+  "domain": "spoolman_active_spool",
+  "name": "Spoolman Active Spool (Moonraker)",
+  "codeowners": ["@metaathron"],
+  "config_flow": true,
+  "documentation": "https://github.com/metaathron/ha-spoolman-active",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/metaathron/ha-spoolman-active/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

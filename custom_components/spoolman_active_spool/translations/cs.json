@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Přidat tiskárnu",
+        "description": "Ke každé cívce ze Spoolman integrace se přidá tlačítko pro nastavení aktivního filamentu na této tiskárně. Pro každou další tiskárnu přidej integraci znovu s jiným Moonraker URL.",
+        "data": {
+          "name": "Název tiskárny",
+          "moonraker_url": "URL Moonrakeru (např. http://192.168.1.50:7125)",
+          "verify_ssl": "Ověřovat SSL certifikát"
+        }
+      },
+      "reconfigure": {
+        "title": "Upravit tiskárnu",
+        "description": "Změna názvu tiskárny přejmenuje i technické entity_id tlačítek (button.spoolman_spool_..._„název“).",
+        "data": {
+          "name": "Název tiskárny",
+          "moonraker_url": "URL Moonrakeru (např. http://192.168.1.50:7125)",
+          "verify_ssl": "Ověřovat SSL certifikát"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nepodařilo se spojit s Moonrakerem, nebo v něm není nakonfigurovaná komponenta [spoolman].",
+      "unknown": "Neočekávaná chyba, zkontroluj prosím log."
+    },
+    "abort": {
+      "already_configured": "Tato tiskárna (Moonraker URL) už je nakonfigurovaná.",
+      "reconfigure_successful": "Nastavení tiskárny bylo upraveno."
+    }
+  }
+}
