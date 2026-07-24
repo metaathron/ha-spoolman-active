@@ -58,11 +58,15 @@ from .spoolman_registry import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Modern, mobile-first dark theme. The page is self-contained (no external
+# Modern, mobile-first theme that follows the device's light/dark setting
+# (prefers-color-scheme) - Home Assistant's own frontend theme choice isn't
+# readable from a plain webhook response (it's a per-user browser setting,
+# not part of hass.config), so this is the closest practical equivalent and
+# needs no configuration. The page is self-contained (no external
 # fonts/JS/CSS) since it's served straight off the local HA instance.
 _STYLE = """
 :root {
-  color-scheme: dark;
+  color-scheme: light dark;
   --bg: #0f1115;
   --bg-elevated: #1a1d24;
   --bg-elevated-2: #22262f;
@@ -73,8 +77,31 @@ _STYLE = """
   --accent: #4f8cff;
   --success: #3ddc84;
   --error: #ff6b6b;
+  --dashed-border: rgba(255,255,255,.32);
+  --icon-ring: rgba(255,255,255,.08);
+  --body-bg: radial-gradient(circle at top, #171a21, var(--bg) 60%);
   --radius-lg: 1.1rem;
   --radius-md: .85rem;
+}
+/* A single variable drives the body background (rather than two separate
+   "body { background: ... }" rules) so light mode can't lose a cascade
+   tie-break to the plain rule below just because of source order. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef0f3;
+    --bg-elevated: #ffffff;
+    --bg-elevated-2: #e7e9ed;
+    --border: #d8dbe1;
+    --text: #1c1f24;
+    --text-dim: #565f6b;
+    --text-faint: #848c98;
+    --accent: #2f6fed;
+    --success: #1f9d55;
+    --error: #d9363e;
+    --dashed-border: rgba(20,22,26,.28);
+    --icon-ring: rgba(0,0,0,.08);
+    --body-bg: #ffffff;
+  }
 }
 * { box-sizing: border-box; }
 html {
@@ -86,7 +113,7 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: radial-gradient(circle at top, #171a21, var(--bg) 60%);
+  background: var(--body-bg);
   color: var(--text);
   line-height: 1.45;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
@@ -113,19 +140,19 @@ h1 { font-size: 1.4rem; font-weight: 700; margin: 0 0 1.25rem; letter-spacing: -
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--bg-elevated-2);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+  box-shadow: inset 0 0 0 1px var(--icon-ring);
 }
 .spool-icon svg { width: 100%; height: 100%; display: block; }
 .spool-icon.is-empty {
   background: transparent;
-  border: 1.5px dashed rgba(255,255,255,.32);
+  border: 1.5px dashed var(--dashed-border);
 }
 .spool-icon.is-empty::before {
   content: "";
   width: 28%;
   height: 28%;
   border-radius: 50%;
-  border: 1.5px dashed rgba(255,255,255,.32);
+  border: 1.5px dashed var(--dashed-border);
 }
 .spool-badge { width: 2.9rem; height: 2.9rem; }
 .spool-hero { width: 96px; height: 96px; margin-bottom: .9rem; }
@@ -367,8 +394,9 @@ def _page(title: str, body: str, lang: str = "en") -> web.Response:
     text = (
         f'<!DOCTYPE html><html lang="{lang}"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<meta name="color-scheme" content="dark">'
-        '<meta name="theme-color" content="#0f1115">'
+        '<meta name="color-scheme" content="light dark">'
+        '<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">'
+        '<meta name="theme-color" content="#eef0f3" media="(prefers-color-scheme: light)">'
         f"<title>{html.escape(title)}</title><style>{_STYLE}</style></head>"
         f'<body><div class="page"><h1>{html.escape(title)}</h1>{body}</div></body></html>'
     )
