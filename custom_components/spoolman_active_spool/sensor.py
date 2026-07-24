@@ -22,6 +22,7 @@ from typing import Callable
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -30,14 +31,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HUB, ENTRY_TYPE_PRINTER
 from .coordinator import ActiveSpoolCoordinator
 from .spoolman_registry import (
     find_spool_device,
     printer_device_identifier,
     printer_object_id,
+    spool_entity_picture,
     spool_source_entities,
 )
+from .webhook_hub import webhook_full_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +61,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    entry_type = entry.data.get(CONF_ENTRY_TYPE, ENTRY_TYPE_PRINTER)
+    if entry_type == ENTRY_TYPE_HUB:
+        async_add_entities([WebhookUrlSensor(hass, entry)])
+        return
+
     coordinator: ActiveSpoolCoordinator = hass.data[DOMAIN][entry.entry_id][
         "coordinator"
     ]
@@ -150,7 +158,25 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
     @callback
     def _handle_source_event(self, event: Event[EventStateChangedData]) -> None:
         """Called whenever the source entity's own value changes."""
-        self._apply_source_state(event.data["new_state"])
+        self._apply_source_state(event.data["new_state"], self._id_picture_override())
+
+    def _id_picture_override(self) -> str | None:
+        """For the primary "Aktivní cívka" mirror (suffix "id"), the colour
+        swatch/photo Spoolman generated for the active spool - scanned the
+        same robust way spool_entity_picture() always has, rather than
+        trusting whichever single source entity this mirror happens to be
+        pointed at (material/vendor/colour aren't their own suffixed
+        entities - see spool_meta_attrs() in spoolman_registry.py - and
+        picture support is no different)."""
+        if self._suffix != "id":
+            return None
+        spool_id = self.coordinator.data.get("spool_id") if self.coordinator.data else None
+        if spool_id is None:
+            return None
+        device = find_spool_device(self._dev_reg, spool_id)
+        if device is None:
+            return None
+        return spool_entity_picture(self._hass, device.id)
 
     def _resync(self) -> None:
         """Point this mirror at the right source entity for the active spool."""
@@ -179,9 +205,11 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
             if new_source_entity_id
             else None
         )
-        self._apply_source_state(state)
+        self._apply_source_state(state, self._id_picture_override())
 
-    def _apply_source_state(self, state: State | None) -> None:
+    def _apply_source_state(
+        self, state: State | None, picture_override: str | None = None
+    ) -> None:
         if state is None or state.state in ("unknown", "unavailable"):
             self._attr_native_value = None
             self._attr_native_unit_of_measurement = None
@@ -194,9 +222,39 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
                 "unit_of_measurement"
             )
             self._attr_device_class = state.attributes.get("device_class")
-            # Same icon (and, for the id/color sensors, the same generated
-            # color swatch image) as the Spoolman integration's own entity.
             self._attr_icon = state.attributes.get("icon")
             self._attr_entity_picture = state.attributes.get("entity_picture")
+        # Same colour swatch/photo as the Spoolman integration's own entity
+        # for the active spool, regardless of what the line above found.
+        if picture_override:
+            self._attr_entity_picture = picture_override
         if self.hass is not None:
             self.async_write_ha_state()
+
+
+class WebhookUrlSensor(SensorEntity):
+    """Diagnostic sensor showing the hub's QR webhook base URL."""
+
+    _attr_has_entity_name = False
+    _attr_icon = "mdi:qrcode-scan"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._hass = hass
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_webhook_url"
+        self._attr_name = "QR webhook URL"
+        self.entity_id = "sensor.spoolman_qr_webhook_url"
+        self._attr_device_info = DeviceInfo(
+            identifiers={printer_device_identifier(entry.entry_id)},
+            name=entry.title,
+            manufacturer="Spoolman Active Spool (Moonraker)",
+            model="QR odkazy",
+        )
+
+    @property
+    def native_value(self) -> str:
+        url = webhook_full_url(self._hass, self._entry)
+        if url is None:
+            return "Nedostupné - nastav Home Assistant URL nebo vyplň base_url"
+        return url

@@ -2,6 +2,14 @@
   "config": {
     "step": {
       "user": {
+        "title": "Spoolman Active Spool",
+        "description": "Co chceš přidat?",
+        "menu_options": {
+          "printer": "Tiskárna",
+          "webhook": "QR odkazy (webhook)"
+        }
+      },
+      "printer": {
         "title": "Přidat tiskárnu",
         "description": "Ke každé cívce ze Spoolman integrace se přidá tlačítko pro nastavení aktivního filamentu na této tiskárně a vznikne samostatný device s údaji o aktivní cívce. Pro každou další tiskárnu přidej integraci znovu s jiným Moonraker URL.",
         "data": {
@@ -11,7 +19,7 @@
           "poll_interval": "Interval kontroly aktivní cívky (sekundy)"
         }
       },
-      "reconfigure": {
+      "reconfigure_printer": {
         "title": "Upravit tiskárnu",
         "description": "Změna názvu tiskárny přejmenuje i technické entity_id tlačítek (button.spoolman_spool_..._„název“).",
         "data": {
@@ -20,15 +28,35 @@
           "verify_ssl": "Ověřovat SSL certifikát",
           "poll_interval": "Interval kontroly aktivní cívky (sekundy)"
         }
+      },
+      "webhook": {
+        "title": "QR odkazy (webhook)",
+        "description": "Vytvoří jeden sdílený odkaz pro nastavení aktivní cívky naskenováním QR kódu. Ke každé cívce přibude entita s QR kódem. Otevření odkazu (naskenování) nic nezmění - teprve výběr tiskárny na zobrazené stránce provede skutečné nastavení.",
+        "data": {
+          "webhook_id": "Webhook ID (součást URL - lze upravit ručně)",
+          "local_only": "Jen v domácí síti",
+          "base_url": "Adresa Home Assistantu (prázdné = doplní se automaticky)"
+        }
+      },
+      "reconfigure_webhook": {
+        "title": "Upravit QR odkazy (webhook)",
+        "description": "Změna webhook ID nebo adresy změní i obsah všech QR kódů - staré nalepené kódy přestanou fungovat.",
+        "data": {
+          "webhook_id": "Webhook ID (součást URL - lze upravit ručně)",
+          "local_only": "Jen v domácí síti",
+          "base_url": "Adresa Home Assistantu (prázdné = doplní se automaticky)"
+        }
       }
     },
     "error": {
       "cannot_connect": "Nepodařilo se spojit s Moonrakerem, nebo v něm není nakonfigurovaná komponenta [spoolman].",
-      "unknown": "Neočekávaná chyba, zkontroluj prosím log."
+      "unknown": "Neočekávaná chyba, zkontroluj prosím log.",
+      "invalid_webhook_id": "Webhook ID smí obsahovat jen písmena, čísla, pomlčky a podtržítka (8-64 znaků).",
+      "webhook_id_taken": "Toto webhook ID už je v Home Assistantu použité, zvol jiné."
     },
     "abort": {
-      "already_configured": "Tato tiskárna (Moonraker URL) už je nakonfigurovaná.",
-      "reconfigure_successful": "Nastavení tiskárny bylo upraveno."
+      "already_configured": "Toto už je nakonfigurované.",
+      "reconfigure_successful": "Nastavení bylo upraveno."
     }
   }
 }

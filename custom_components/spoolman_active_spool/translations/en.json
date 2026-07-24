@@ -2,6 +2,14 @@
   "config": {
     "step": {
       "user": {
+        "title": "Spoolman Active Spool",
+        "description": "What would you like to add?",
+        "menu_options": {
+          "printer": "Printer",
+          "webhook": "QR links (webhook)"
+        }
+      },
+      "printer": {
         "title": "Add printer",
         "description": "Adds a button to every device created by the Spoolman integration, and creates a separate device holding the active spool's data. Add the integration again for each additional printer with a different Moonraker URL.",
         "data": {
@@ -11,7 +19,7 @@
           "poll_interval": "Active spool poll interval (seconds)"
         }
       },
-      "reconfigure": {
+      "reconfigure_printer": {
         "title": "Reconfigure printer",
         "description": "Renaming the printer also renames the buttons' technical entity_id (button.spoolman_spool_..._'name').",
         "data": {
@@ -20,15 +28,35 @@
           "verify_ssl": "Verify SSL certificate",
           "poll_interval": "Active spool poll interval (seconds)"
         }
+      },
+      "webhook": {
+        "title": "QR links (webhook)",
+        "description": "Creates one shared link for setting the active spool by scanning a QR code. Every spool gets a QR-code image entity. Opening the link (scanning) changes nothing by itself - only picking a printer on the page that opens actually applies the change.",
+        "data": {
+          "webhook_id": "Webhook ID (part of the URL - can be edited manually)",
+          "local_only": "Local network only",
+          "base_url": "Home Assistant address (leave empty to auto-detect)"
+        }
+      },
+      "reconfigure_webhook": {
+        "title": "Reconfigure QR links (webhook)",
+        "description": "Changing the webhook ID or address changes the content of every QR code - old printed codes will stop working.",
+        "data": {
+          "webhook_id": "Webhook ID (part of the URL - can be edited manually)",
+          "local_only": "Local network only",
+          "base_url": "Home Assistant address (leave empty to auto-detect)"
+        }
       }
     },
     "error": {
       "cannot_connect": "Could not reach Moonraker, or its [spoolman] component is not configured.",
-      "unknown": "Unexpected error, please check the logs."
+      "unknown": "Unexpected error, please check the logs.",
+      "invalid_webhook_id": "Webhook ID may only contain letters, digits, hyphens and underscores (8-64 chars).",
+      "webhook_id_taken": "This webhook ID is already in use in Home Assistant, pick another one."
     },
     "abort": {
-      "already_configured": "This printer (Moonraker URL) is already configured.",
-      "reconfigure_successful": "The printer's settings were updated."
+      "already_configured": "This is already configured.",
+      "reconfigure_successful": "The settings were updated."
     }
   }
 }

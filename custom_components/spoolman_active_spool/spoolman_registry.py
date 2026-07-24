@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.util import slugify
 
-from .const import DOMAIN, SPOOLMAN_DOMAIN
+from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_PRINTER, SPOOLMAN_DOMAIN
 
 
 def printer_object_id(printer_name: str) -> str:
@@ -91,10 +92,13 @@ def spool_source_entities(
 
 
 def spool_state_value(hass: HomeAssistant, device_id: str, suffix: str) -> str | None:
-    """Read one attribute (by suffix) of a spool device straight from HA state.
+    """Read one *dedicated* "_spool_<id>_<suffix>" sensor's own state.
 
-    Used for building the dropdown label (material / vendor / name) without
-    ever calling Spoolman's API.
+    Only useful for fields Spoolman gives their own sensor entity (e.g.
+    "weight", "id"). material/vendor/name/color are NOT among them - they
+    are "filament_*" attributes on the spool's main sensor instead (see
+    spool_meta_attrs() below), so its own unique_id has no trailing suffix
+    and is invisible to the "_{suffix}" match here.
     """
     ent_reg = er.async_get(hass)
     for entry in er.async_entries_for_device(
@@ -110,6 +114,82 @@ def spool_state_value(hass: HomeAssistant, device_id: str, suffix: str) -> str |
     return None
 
 
+# The "filament_*" attributes live on the spool's main sensor entity
+# (sensor.spoolman_spool_<id>), alongside whatever *other* dedicated sensor
+# entities exist for that same device (e.g. "..._weight"). Scanning every
+# sensor entity of the device and reading its attributes - rather than
+# matching a specific entity by suffix - finds them regardless of which
+# entity happens to carry them.
+SPOOL_META_ATTR_KEYS = (
+    "filament_material",
+    "filament_vendor_name",
+    "filament_name",
+    "filament_color_hex",
+    "filament_multi_color_hexes",
+    "filament_multi_color_direction",
+)
+
+
+def spool_meta_attrs(hass: HomeAssistant, device_id: str) -> dict[str, str]:
+    """First non-empty value per SPOOL_META_ATTR_KEYS key, scanning every
+    sensor entity of the device."""
+    ent_reg = er.async_get(hass)
+    found: dict[str, str] = {}
+    for entry in er.async_entries_for_device(
+        ent_reg, device_id, include_disabled_entities=False
+    ):
+        if entry.platform != SPOOLMAN_DOMAIN or entry.domain != "sensor":
+            continue
+        state = hass.states.get(entry.entity_id)
+        if state is None:
+            continue
+        for key in SPOOL_META_ATTR_KEYS:
+            if key not in found:
+                value = state.attributes.get(key)
+                if value not in (None, ""):
+                    found[key] = value
+        if len(found) == len(SPOOL_META_ATTR_KEYS):
+            break
+    return found
+
+
+def spool_entity_picture(hass: HomeAssistant, device_id: str) -> str | None:
+    """Return the color-swatch image path Spoolman already generated for a
+    spool, if any (its "spool" or "filament_color_hex" sensor sets one).
+    """
+    ent_reg = er.async_get(hass)
+    for entry in er.async_entries_for_device(
+        ent_reg, device_id, include_disabled_entities=False
+    ):
+        if entry.platform != SPOOLMAN_DOMAIN or entry.domain != "sensor":
+            continue
+        state = hass.states.get(entry.entity_id)
+        if state is not None and state.attributes.get("entity_picture"):
+            return state.attributes["entity_picture"]
+    return None
+
+
+def spool_label(hass: HomeAssistant, device: DeviceEntry, spool_id: int) -> str:
+    """Human-readable "material - vendor - name" label for a spool device."""
+    meta = spool_meta_attrs(hass, device.id)
+    material = meta.get("filament_material") or "?"
+    vendor = meta.get("filament_vendor_name") or "?"
+    name = meta.get("filament_name") or f"Cívka {spool_id}"
+    return f"{material} - {vendor} - {name}"
+
+
+def printer_entries(hass: HomeAssistant) -> list:
+    """Every loaded printer (non-hub) config entry of this integration."""
+    return [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.data.get(CONF_ENTRY_TYPE, ENTRY_TYPE_PRINTER) == ENTRY_TYPE_PRINTER
+        and entry.state is ConfigEntryState.LOADED
+    ]
+
+
 def printer_device_identifier(entry_id: str) -> tuple[str, str]:
-    """Stable device identifier for the printer device of one config entry."""
+    """Stable device identifier for the device owned by one config entry
+    (a printer's device, or the webhook hub's device).
+    """
     return (DOMAIN, entry_id)

@@ -1,0 +1,27 @@
+{
+  "chrome": {
+    "title_set": "Set active spool",
+    "title_remove": "Remove active spool",
+    "title_error": "Error",
+    "title_result": "Result",
+    "prompt_set": "Which printer should it be set on?",
+    "prompt_remove": "Remove from which printer?",
+    "err_invalid_id": "Spool ID is not a valid number.",
+    "err_not_found": "Spool #{id} was not found.",
+    "err_no_printers": "No printer is configured.",
+    "err_invalid_printer": "Invalid or unavailable printer.",
+    "err_unexpected": "An unexpected error occurred, check the log.",
+    "err_action_failed": "Failed to {action} the spool: {err}",
+    "action_remove": "remove",
+    "action_set": "set",
+    "ok_removed": "Active spool on {printer} was removed",
+    "ok_set": "Set: {spool} on {printer}",
+    "current_on": "Current spool on {printer}: {spool}",
+    "empty_spool": "empty",
+    "no_active_spool": "none",
+    "unknown_spool": "spool #{id}",
+    "spool_fallback_name": "Spool {id}",
+    "more_params": "More parameters ({n})"
+  },
+  "details": {}
+}

@@ -30,7 +30,7 @@ from .spoolman_registry import (
     iter_spool_devices,
     printer_device_identifier,
     printer_object_id,
-    spool_state_value,
+    spool_meta_attrs,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,12 +106,10 @@ class ActiveSpoolSelect(CoordinatorEntity[ActiveSpoolCoordinator], SelectEntity)
         """Rebuild the "materiál - výrobce - název #id" option list from HA state."""
         rows: list[tuple[str, str, str, int]] = []
         for spool_id, device in iter_spool_devices(self._dev_reg):
-            material = spool_state_value(self._hass, device.id, "material") or "?"
-            vendor = spool_state_value(self._hass, device.id, "vendor") or "?"
-            name = (
-                spool_state_value(self._hass, device.id, "filament_name")
-                or f"Cívka {spool_id}"
-            )
+            meta = spool_meta_attrs(self._hass, device.id)
+            material = meta.get("filament_material") or "?"
+            vendor = meta.get("filament_vendor_name") or "?"
+            name = meta.get("filament_name") or f"Cívka {spool_id}"
             rows.append((material, vendor, name, spool_id))
 
         rows.sort(key=lambda row: (row[0].lower(), row[1].lower(), row[2].lower()))
