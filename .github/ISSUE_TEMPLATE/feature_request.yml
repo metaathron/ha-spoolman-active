@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest a new feature or improvement for the ha-spoolman-active integration
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Please fill in the details below.
+
+        > **Note on version:** the `latest` tag/version is **not** the same as the most recently released version of Spoolman. Please provide specific version numbers, not `latest`.
+
+  - type: input
+    id: spoolman-integration-version
+    attributes:
+      label: Spoolman integration version
+      description: Version of the installed Spoolman Home Assistant integration this add-on depends on (not "latest")
+      placeholder: "e.g. 1.0.2"
+    validations:
+      required: true
+
+  - type: input
+    id: backend-version
+    attributes:
+      label: Spoolman version
+      description: Specific Spoolman version this request relates to (not "latest")
+      placeholder: "e.g. 0.19.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Requested feature
+      description: What would you like the integration to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / use case
+      description: Why is this needed, what problem does it solve?
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Is there a current workaround or existing solution?
+    validations:
+      required: false
