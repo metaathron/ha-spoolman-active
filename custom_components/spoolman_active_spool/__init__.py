@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HUB, ENTRY_TYPE_PRINTER
 from .coordinator import ActiveSpoolCoordinator
-from .webhook_hub import async_register_webhook
+from .webhook_hub import async_register_spool_show_view, async_register_webhook
 
 PLATFORMS_PRINTER: list[Platform] = [Platform.BUTTON, Platform.SENSOR, Platform.SELECT]
 PLATFORMS_HUB: list[Platform] = [Platform.IMAGE, Platform.SENSOR]
@@ -32,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if entry_type == ENTRY_TYPE_HUB:
         await async_register_webhook(hass, entry)
+        async_register_spool_show_view(hass)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS_HUB)
         return True
 

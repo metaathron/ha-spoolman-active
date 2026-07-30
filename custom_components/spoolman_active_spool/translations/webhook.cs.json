@@ -21,7 +21,8 @@
     "no_active_spool": "žádná",
     "unknown_spool": "cívka #{id}",
     "spool_fallback_name": "Cívka {id}",
-    "more_params": "Další parametry ({n})"
+    "more_params": "Další parametry ({n})",
+    "printer_offline": "Offline"
   },
   "details": {
     "weight": "Hmotnost",

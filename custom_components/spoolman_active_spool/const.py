@@ -31,3 +31,9 @@ MIN_POLL_INTERVAL = 1  # seconds
 DEFAULT_LOCAL_ONLY = True
 
 REQUEST_TIMEOUT = 10
+
+# Short timeout for the best-effort "is this printer online" check shown on
+# the webhook picker page - deliberately much shorter than REQUEST_TIMEOUT
+# so a dead printer doesn't stall page rendering; a timeout just means the
+# page shows an "offline" hint, it never blocks the actual set/clear action.
+ONLINE_CHECK_TIMEOUT = 2

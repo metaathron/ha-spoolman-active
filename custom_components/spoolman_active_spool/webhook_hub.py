@@ -15,6 +15,23 @@ phone shortcut), not for a QR code entity. Because it turns GET
 side-effecting, a link that includes "printer" must never be pasted
 somewhere that auto-generates a preview (chat apps, ...): treat it like a
 POST, not like the plain spool_id-only links.
+
+Also registered (once per Home Assistant instance, not per config entry): a
+plain HTTP view at /api/webhook/<webhook_id>/spool/show/<spool_id> - same
+webhook_id as the main webhook above, just with the spool id in the path
+instead of a query param. It renders and behaves exactly like the
+"?spool_id=<n>" GET/POST flow (same picker, same POST-safety rules, same
+"&printer=<stub>" direct-apply support). It exists to match the URL shape
+stock Spoolman's own label-printing feature can generate
+(https://github.com/Donkie/Spoolman/pull/461 - Settings -> choose "URL" for
+label QR codes, base_url + "/spool/show/{id}") and what forks such as
+https://github.com/sherrmann/Spoolman-NG generate directly - see README for
+which one to point Spoolman's own base_url setting at, and why the plain
+"?spool_id=" webhook (support for the remove flow and "printer=" direct
+links) is still the recommended default. It is registered as a separate
+HTTP view, not through the webhook component itself, because that
+component only ever routes the bare /api/webhook/<webhook_id> path with no
+extra path segment.
 """
 
 from __future__ import annotations
@@ -26,17 +43,20 @@ import json
 import logging
 import re
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 
 import aiohttp
 from aiohttp import web
 
 from homeassistant.components import webhook
+from homeassistant.components.http import HomeAssistantView
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+from homeassistant.util.network import is_local
 
 from .const import (
     CONF_BASE_URL,
@@ -45,9 +65,10 @@ from .const import (
     CONF_WEBHOOK_ID,
     DEFAULT_LOCAL_ONLY,
     DOMAIN,
+    ENTRY_TYPE_HUB,
     ENTRY_TYPE_PRINTER,
 )
-from .moonraker import async_set_active_spool
+from .moonraker import async_check_online, async_set_active_spool
 from .spoolman_registry import (
     find_spool_device,
     printer_entries,
@@ -223,7 +244,14 @@ button.printer-btn {
 button.printer-btn:active { transform: scale(.98); background: var(--bg-elevated-2); }
 button.printer-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .printer-text { display: flex; flex-direction: column; gap: .2rem; min-width: 0; flex: 1; }
-.printer-name { font-weight: 600; }
+.printer-name-row { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+.printer-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.printer-offline {
+  flex-shrink: 0; font-size: .68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--error); background: rgba(255,107,107,.14);
+  border: 1px solid rgba(255,107,107,.35); border-radius: 999px; padding: .05rem .45rem;
+  line-height: 1.5;
+}
 .printer-current {
   font-size: .88rem; color: var(--text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -571,7 +599,7 @@ def _spool_card_html(hass: HomeAssistant, spool_id: int, lang: str) -> tuple[str
     return label, card
 
 
-def _printer_button_html(hass: HomeAssistant, entry: ConfigEntry, lang: str) -> str:
+async def _printer_button_html(hass: HomeAssistant, entry: ConfigEntry, lang: str) -> str:
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     current_spool_id = coordinator.data.get("spool_id") if coordinator.data else None
 
@@ -592,12 +620,23 @@ def _printer_button_html(hass: HomeAssistant, entry: ConfigEntry, lang: str) -> 
                 multi_direction=info["multi_direction"],
             )
 
+    # Best-effort, live check - purely informational, never disables the
+    # button (the check itself can be flaky/slow; the actual set/clear
+    # action gets its own proper error handling in _apply_spool_and_render).
+    online = await async_check_online(hass, coordinator.moonraker_url, coordinator.verify_ssl)
+    offline_badge = (
+        "" if online else f'<span class="printer-offline">{html.escape(_t(lang, "printer_offline"))}</span>'
+    )
+
     return (
         '<button type="submit" class="printer-btn" '
         f'name="printer_entry_id" value="{html.escape(entry.entry_id)}">'
         f"{icon_html}"
         '<span class="printer-text">'
+        '<span class="printer-name-row">'
         f'<span class="printer-name">{html.escape(entry.title)}</span>'
+        f"{offline_badge}"
+        "</span>"
         f'<span class="printer-current">{html.escape(current_text)}</span>'
         "</span>"
         "</button>"
@@ -612,9 +651,14 @@ def _find_printer_by_stub(hass: HomeAssistant, stub: str) -> ConfigEntry | None:
     return None
 
 
-async def _handle_get(hass: HomeAssistant, request: web.Request) -> web.Response:
+async def _handle_get(
+    hass: HomeAssistant, request: web.Request, path_spool_id: str | None = None
+) -> web.Response:
+    """path_spool_id overrides the "spool_id" query param - used by
+    _WebhookSpoolShowView, whose spool id comes from the URL path instead
+    (to match Spoolman's own /spool/show/<id> shape)."""
     lang = _lang(hass)
-    raw_spool_id = request.query.get("spool_id")
+    raw_spool_id = path_spool_id if path_spool_id is not None else request.query.get("spool_id")
     printer_stub = request.query.get("printer")
 
     spool_id: int | None = None
@@ -636,17 +680,17 @@ async def _handle_get(hass: HomeAssistant, request: web.Request) -> web.Response
 
     if raw_spool_id is None:
         # No spool_id, no printer -> "remove the active spool" picker, not an error.
-        return _render_picker(
+        return await _render_picker(
             hass, spool_id=None, title=_t(lang, "title_remove"), info_html="", lang=lang
         )
 
     _, info_html = _spool_card_html(hass, spool_id, lang)
-    return _render_picker(
+    return await _render_picker(
         hass, spool_id=spool_id, title=_t(lang, "title_set"), info_html=info_html, lang=lang
     )
 
 
-def _render_picker(
+async def _render_picker(
     hass: HomeAssistant, spool_id: int | None, title: str, info_html: str, lang: str
 ) -> web.Response:
     printers = printer_entries(hass)
@@ -654,7 +698,11 @@ def _render_picker(
         err = _t(lang, "err_no_printers")
         return _page(title, info_html + f"<p class='err'>{html.escape(err)}</p>", lang)
 
-    buttons = "".join(_printer_button_html(hass, p, lang) for p in printers)
+    # Concurrent, not sequential - each online check has its own short
+    # timeout, but with N printers a sequential await would still add up.
+    buttons = "".join(
+        await asyncio.gather(*(_printer_button_html(hass, p, lang) for p in printers))
+    )
     hidden = f'<input type="hidden" name="spool_id" value="{spool_id}">' if spool_id is not None else ""
     prompt = _t(lang, "prompt_remove" if spool_id is None else "prompt_set")
     body = (
@@ -768,3 +816,99 @@ async def async_register_webhook(hass: HomeAssistant, entry: ConfigEntry) -> Non
         local_only=entry.data.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY),
     )
     entry.async_on_unload(lambda: webhook.async_unregister(hass, webhook_id))
+
+
+def _find_hub_entry_by_webhook_id(hass: HomeAssistant, webhook_id: str) -> ConfigEntry | None:
+    """The hub entry whose configured webhook_id matches the URL's path
+    segment - this view isn't registered through the webhook component, so
+    it has to resolve this itself instead of getting it handed in."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if (
+            entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_HUB
+            and entry.data.get(CONF_WEBHOOK_ID) == webhook_id
+        ):
+            return entry
+    return None
+
+
+def _is_local_request(request: web.Request) -> bool:
+    """Same check the webhook component itself applies for local_only."""
+    try:
+        remote = ip_address(request.remote)
+    except ValueError:
+        return False
+    return is_local(remote)
+
+
+class _WebhookSpoolShowView(HomeAssistantView):
+    """Spoolman-compatible "/spool/show/<id>" endpoint, nested under the
+    hub's own webhook_id.
+
+    Matches the path stock Spoolman's own label-printing feature builds
+    when its "URL" mode is selected (base_url + "/spool/show/{id}" - see
+    https://github.com/Donkie/Spoolman/pull/461) and what forks such as
+    https://github.com/sherrmann/Spoolman-NG can generate directly.
+    Renders/behaves exactly like the "?spool_id=<n>" GET/POST webhook flow
+    (same picker, same POST-safety rules, same "&printer=<stub>"
+    direct-apply support) - it's just a second entry point at a
+    spool-id-in-path URL, reusing the exact same webhook_id as the main
+    webhook so there is only one URL/id to configure per hub.
+
+    Registered once for the whole Home Assistant instance (HTTP views are
+    global, not per config entry) and resolves webhook_id -> hub entry
+    itself, since it isn't routed through the webhook component.
+    """
+
+    url = "/api/webhook/{webhook_id}/spool/show/{spool_id}"
+    name = "api:spoolman_active_spool:webhook_spool_show"
+    requires_auth = False
+
+    async def get(self, request: web.Request, webhook_id: str, spool_id: str) -> web.Response:
+        return await self._handle(request, webhook_id, spool_id, method="GET")
+
+    async def post(self, request: web.Request, webhook_id: str, spool_id: str) -> web.Response:
+        # The picker form posts back to this same URL with no "action="
+        # attribute; the actual spool id travels in its hidden field
+        # (rendered by _render_picker from the GET above), so the path's
+        # spool_id isn't needed again here - only webhook_id, for the
+        # local_only check.
+        return await self._handle(request, webhook_id, spool_id, method="POST")
+
+    async def _handle(
+        self, request: web.Request, webhook_id: str, spool_id: str, method: str
+    ) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        entry = _find_hub_entry_by_webhook_id(hass, webhook_id)
+        if entry is None:
+            return web.Response(status=404)
+
+        if entry.data.get(CONF_LOCAL_ONLY, DEFAULT_LOCAL_ONLY) and not _is_local_request(request):
+            _LOGGER.warning(
+                "Spoolman Active Spool: rejected non-local /spool/show request for webhook %s",
+                webhook_id,
+            )
+            return web.Response(status=200)
+
+        try:
+            if method == "GET":
+                return await _handle_get(hass, request, path_spool_id=spool_id)
+            return await _handle_post(hass, request)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Spoolman Active Spool: /spool/show view failed")
+            lang = _lang(hass)
+            return _page(
+                _t(lang, "title_error"),
+                f"<p class='err'>{html.escape(_t(lang, 'err_unexpected'))}</p>",
+                lang,
+            )
+
+
+def async_register_spool_show_view(hass: HomeAssistant) -> None:
+    """Register the /api/webhook/<id>/spool/show/<id> view - once per Home
+    Assistant instance, no matter how many hub entries get set up or
+    reloaded."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get("_webhook_spool_show_view_registered"):
+        return
+    hass.http.register_view(_WebhookSpoolShowView())
+    domain_data["_webhook_spool_show_view_registered"] = True

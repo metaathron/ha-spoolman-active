@@ -21,7 +21,8 @@
     "no_active_spool": "none",
     "unknown_spool": "spool #{id}",
     "spool_fallback_name": "Spool {id}",
-    "more_params": "More parameters ({n})"
+    "more_params": "More parameters ({n})",
+    "printer_offline": "Offline"
   },
   "details": {}
 }

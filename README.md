@@ -61,46 +61,125 @@ of each as you need:
 The printer's name, URL, SSL verification and poll interval can be changed
 later from the integration's **Reconfigure** option, without needing to
 remove and re-add it. Renaming the printer also renames the buttons'
-`entity_id`.
+`entity_id`. The printer's slugified name (`<printer>` below - spaces →
+underscores, diacritics stripped, e.g. "Voron 2.4" → `voron_24`) is what
+identifies it in webhook URLs.
 
 ### QR links (webhook hub)
 
 A single, optional entry (add the integration again, choose **QR links
 (webhook)** - it only appears once, before it's been set up). It creates one
 shared link/webhook and a QR-code image entity for every spool. Scanning a
-spool's QR code opens a small, self-contained page (dark theme, mobile
-responsive) showing that spool and a button per configured printer; picking
-a printer applies it immediately. Opening the link (e.g. a chat app's link
-preview) never changes anything by itself - only submitting the printer
-choice does.
+spool's QR code opens a small, self-contained page showing that spool and a
+button per configured printer; picking a printer applies it immediately.
+Opening the link (e.g. a chat app's link preview) never changes anything by
+itself - only submitting the printer choice does.
+
+The page is mobile-first and responsive, and automatically follows
+whichever **light or dark theme your browser/device** is set to
+(`prefers-color-scheme`) - this is independent of Home Assistant's own
+frontend theme, which a plain webhook response has no access to.
+
+The page's **text defaults to English**; if Home Assistant's own configured
+instance language (Settings → System → General) is Czech, the page switches
+to Czech instead. This follows the Home Assistant instance's language, not
+the browser's.
 
 Configurable from the same menu:
 
-- **Webhook ID** - part of the URL, auto-generated but editable.
+- **Webhook ID** - part of the URL (`<webhook_id>` below), auto-generated but editable.
 - **Local network only** - restrict the webhook to LAN requests.
 - **Home Assistant address** - used to build the QR codes' URLs; leave empty
   to auto-detect from Home Assistant's own configured URL.
 
-The page's language follows Home Assistant's own configured language
-(Settings → System → General): Czech if set to Czech, English otherwise.
+#### Two URL shapes, same result
 
-#### Direct links (no picker, for your own automations/NFC tags/shortcuts)
+Both shapes below lead to the same picker/apply page; which one to use
+mostly depends on how you're generating the link (see "Printing labels"
+further down).
 
-Adding `&printer=<printer_stub>` to a webhook URL applies the change
-immediately instead of showing the picker - `<printer_stub>` is the
-printer's name, lowercased/slugified (spaces → underscores, diacritics
-stripped), e.g. "Voron 2.4" → `voron_24`:
+**A. Query-string webhook - the primary, most-featured shape:**
 
-- `.../api/webhook/<id>?spool_id=<n>&printer=<stub>` - set that spool active
-  on that printer.
-- `.../api/webhook/<id>?printer=<stub>` - clear the active spool on that
-  printer.
+```
+.../api/webhook/<webhook_id>?spool_id=<spool_id>&printer=<printer>
+```
 
-**This makes that specific GET request side-effecting**, unlike every other
-link on this page - only use `printer=` links in places that won't
-auto-fetch a preview (an NFC tag, a Home Assistant automation/script, a
-phone shortcut). Never paste one into a chat app or anywhere else that
-generates link previews.
+| Parameter | Required? | Meaning | If missing (default) |
+|---|---|---|---|
+| `<webhook_id>` | yes (part of the path) | Identifies which hub entry - fixed per hub, set in its "Webhook ID" field. | - |
+| `spool_id` | no | Integer spool id. | Switches to the **remove active spool** flow instead of "set" (no spool card shown, printer picker still shown). |
+| `printer` | no | The target printer's slugified name (see above). | Shows the printer picker page instead of applying anything; the change only happens once the picker's form is submitted (POST). |
+
+**B. Spoolman-compatible path - for stock Spoolman's built-in label printer:**
+
+```
+.../api/webhook/<webhook_id>/spool/show/<spool_id>?printer=<printer>
+```
+
+| Parameter | Required? | Meaning | If missing (default) |
+|---|---|---|---|
+| `<webhook_id>` | yes (part of the path) | Same as above. | - |
+| `<spool_id>` | yes (part of the path) | Integer spool id. There is no "remove" equivalent for this shape - it always needs a spool id in the path; use shape A without `spool_id` for removing (e.g. via the `image.spoolman_qr_remove_active_spool` entity). | - |
+| `printer` | no | Same meaning as in shape A. | Same as in shape A - shows the picker. |
+
+Behaves identically to shape A from the picker onward (same printer list,
+same POST-safety, same live "offline" hint) - it exists purely to match the
+fixed URL shape stock Spoolman's own label printer generates.
+
+> [!WARNING]
+> Including `printer` makes that specific GET request side-effecting,
+> unlike every other link on this page - only use links with `printer` in
+> places that won't auto-fetch a preview (an NFC tag, a Home Assistant
+> automation/script, a phone shortcut). Never paste one into a chat app or
+> anywhere else that generates link previews.
+
+## Printing labels
+
+However you generate a code for a spool, it's always one of the two URL
+shapes above - here are three ways to get it onto (or near) the physical
+spool.
+
+### Via stock Spoolman
+
+Stock Spoolman has its own built-in label printer that can already produce
+a QR code pointing elsewhere than its own web UI (Settings → pick "URL"
+instead of the `web+spoolman:` prefix - [Donkie/Spoolman#461](https://github.com/Donkie/Spoolman/pull/461)).
+It always builds the code as `<base_url>/spool/show/<spool_id>` - a fixed
+shape, no query string, no printer selection built in.
+
+1. In Spoolman, go to Settings → General → Base URL and set it to your
+   webhook URL (shown by `sensor.spoolman_qr_webhook_url`, i.e.
+   `http://<ha_host>/api/webhook/<webhook_id>`).
+2. When printing a spool's label, switch "QR code link" to "URL".
+3. Spoolman now prints codes pointing at shape B above - this integration
+   answers there with the same picker as the main webhook.
+
+### Via the Spoolman-NG fork
+
+[Spoolman-NG](https://github.com/sherrmann/Spoolman-NG) supports a fully
+custom URL template instead of Spoolman's fixed `/spool/show/<spool_id>`
+suffix, so you can point it straight at shape A - the primary, most-featured
+link:
+
+```
+...http://<ha_host>/api/webhook/<webhook_id>?spool_id={id}
+...http://<ha_host>/api/webhook/<webhook_id>?spool_id={id}&printer=<printer>
+```
+
+This is the recommended shape whenever you have the choice, since it's what
+this integration's own QR entities use too (remove flow, `printer=`
+direct-apply links, etc. all work from it).
+
+### NFC tags
+
+Since both shapes above are plain URLs, you can write either one to an NFC
+tag with any generic NFC-writing app (e.g. NFC Tools) instead of printing a
+QR code - tapping a phone against the tag opens the same page a QR scan
+would. This pairs especially well with a `printer=<printer>` direct-apply
+link (see above): one tap applies the change immediately, no picker screen
+at all. Writing a link to an NFC tag is a deliberate, one-time action - not
+something that generates automatic link previews - so it's a safe place to
+use those otherwise side-effecting links.
 
 ## Requirements
 
@@ -118,13 +197,14 @@ generates link previews.
 
 For every **existing** spool device from the Spoolman integration, it adds:
 
-- `button.spoolman_spool_<id>_set_active_<printer>` - "Set active on
+- `button.spoolman_spool_<spool_id>_set_active_<printer>` - "Set active on
   `<printer>`". Pressing it sends `POST /server/spoolman/spool_id` to that
   printer's Moonraker with the spool's id, setting it as the active spool
   for that printer (the same thing Moonraker's `SPOOLMAN_SET_ACTIVE_SPOOL`
   gcode macro does). One per configured printer.
-- `image.spoolman_spool_<id>_qr_code` - a QR code linking straight to "set
-  this spool active" on the webhook hub's page. Only created if the QR
+- `image.spoolman_spool_<spool_id>_qr_code` - a QR code encoding
+  `.../api/webhook/<webhook_id>?spool_id=<spool_id>` (shape A above), i.e.
+  "set this spool active" on the webhook hub's page. Only created if the QR
   links hub is configured.
 
 For every configured printer, it also creates one device ("Printer
@@ -172,12 +252,17 @@ The QR links hub creates:
 - Full configuration and reconfiguration from the UI, including the
   printer's name, Moonraker URL, SSL verification, poll interval, and the
   QR hub's webhook ID / local-only setting / base URL.
-- QR-code "set active spool" page: dark, mobile-first, responsive design;
-  a Spoolman-style reel icon tinted with the filament's colour (rendered as
-  hard-edged bands/rings for multi-colour filaments, matching Spoolman's own
-  `multi_color_hexes` + `multi_color_direction`); material/vendor/name shown
-  up front, every other Spoolman field tucked behind a collapsible "more
-  parameters" toggle; follows Home Assistant's configured language (cs/en).
+- QR-code "set active spool" page: mobile-first, responsive design that
+  follows your browser/device's light or dark theme; a Spoolman-style reel
+  icon tinted with the filament's colour (rendered as hard-edged bands/rings
+  for multi-colour filaments, matching Spoolman's own `multi_color_hexes` +
+  `multi_color_direction`); material/vendor/name shown up front, every other
+  Spoolman field tucked behind a collapsible "more parameters" toggle; text
+  defaults to English, switching to Czech if the Home Assistant instance is
+  configured for it. Each printer button also shows a live "offline" hint (a
+  quick, short-timeout check against that printer's Moonraker) if it can't
+  currently be reached - informational only, the button stays clickable
+  either way.
 
 ## Notes
 
