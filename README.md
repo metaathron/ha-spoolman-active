@@ -126,12 +126,11 @@ Behaves identically to shape A from the picker onward (same printer list,
 same POST-safety, same live "offline" hint) - it exists purely to match the
 fixed URL shape stock Spoolman's own label printer generates.
 
-> [!WARNING]
-> Including `printer` makes that specific GET request side-effecting,
-> unlike every other link on this page - only use links with `printer` in
-> places that won't auto-fetch a preview (an NFC tag, a Home Assistant
-> automation/script, a phone shortcut). Never paste one into a chat app or
-> anywhere else that generates link previews.
+> ⚠️ **Warning:** including `printer` makes that specific GET request
+> side-effecting, unlike every other link on this page - only use links
+> with `printer` in places that won't auto-fetch a preview (an NFC tag, a
+> Home Assistant automation/script, a phone shortcut). Never paste one into
+> a chat app or anywhere else that generates link previews.
 
 ## Printing labels
 
