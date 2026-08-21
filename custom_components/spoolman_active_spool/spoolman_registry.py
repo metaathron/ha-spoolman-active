@@ -193,3 +193,19 @@ def printer_device_identifier(entry_id: str) -> tuple[str, str]:
     (a printer's device, or the webhook hub's device).
     """
     return (DOMAIN, entry_id)
+
+
+def our_spool_device_identifier(spool_id: int) -> tuple[str, str]:
+    """Stable identifier for *our own* per-spool device (the "Nastav na..."
+    button and the QR-code image entity).
+
+    Home Assistant 2026.8 removed device sharing across config entries - a
+    device now belongs to exactly one config entry, so entities from a
+    printer entry (or the webhook hub entry) can no longer attach directly
+    to the Spoolman integration's own spool device by reusing its
+    identifiers; each entry that touches a spool now gets its own small
+    device instead. Callers should give that device an explicit `name=`
+    (see spool_label() below) and a `via_device=` pointing at the real
+    Spoolman device, so it still shows up nested under it in the UI.
+    """
+    return (DOMAIN, f"spool_{spool_id}")

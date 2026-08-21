@@ -38,6 +38,7 @@ from .spoolman_registry import (
     printer_device_identifier,
     printer_object_id,
     spool_entity_picture,
+    spool_meta_attrs,
     spool_source_entities,
 )
 from .webhook_hub import webhook_full_url
@@ -100,6 +101,12 @@ async def async_setup_entry(
             async_add_entities(new_entities)
 
     _create_new_mirrors()
+
+    if coordinator.lanes:
+        async_add_entities(
+            LaneSpoolSensor(hass, entry, coordinator, dev_reg, lane)
+            for lane in coordinator.lanes
+        )
 
     @callback
     def _handle_coordinator_update() -> None:
@@ -228,6 +235,81 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
         # for the active spool, regardless of what the line above found.
         if picture_override:
             self._attr_entity_picture = picture_override
+        if self.hass is not None:
+            self.async_write_ha_state()
+
+
+class LaneSpoolSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
+    """One AFC lane's currently assigned spool.
+
+    Deliberately simpler than MirrorSensor's one-entity-per-attribute mirror
+    set (weight, price, ...): a 4-lane printer would otherwise multiply that
+    whole set by 4. Instead this is a single sensor per lane - spool_id as
+    the state, material/vendor/name/colour as attributes - which covers the
+    common automation need (which spool is in lane E0 right now) without an
+    entity explosion. Only created for printers with detected AFC lanes.
+    """
+
+    _attr_has_entity_name = False
+    _attr_icon = "mdi:movie-roll"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: ActiveSpoolCoordinator,
+        dev_reg: dr.DeviceRegistry,
+        lane: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._hass = hass
+        self._dev_reg = dev_reg
+        self._lane = lane
+
+        printer_slug = printer_object_id(entry.title)
+        self._attr_unique_id = f"{entry.entry_id}_active_spool_lane_{lane}"
+        self._attr_name = f"Aktivní cívka ({lane})"
+        self.entity_id = f"sensor.spoolman_active_{printer_slug}_{lane.lower()}_spool"
+        self._attr_device_info = DeviceInfo(
+            identifiers={printer_device_identifier(entry.entry_id)},
+            name=entry.title,
+            manufacturer="Spoolman Active Spool (Moonraker)",
+            model="Tiskárna",
+        )
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._refresh()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        spool_id = (
+            self.coordinator.data.get("lane_spool_ids", {}).get(self._lane)
+            if self.coordinator.data
+            else None
+        )
+        if spool_id is None:
+            self._attr_native_value = None
+            self._attr_extra_state_attributes = {}
+            self._attr_entity_picture = None
+        else:
+            self._attr_native_value = spool_id
+            device = find_spool_device(self._dev_reg, spool_id)
+            if device is not None:
+                meta = spool_meta_attrs(self._hass, device.id)
+                self._attr_extra_state_attributes = {
+                    "material": meta.get("filament_material"),
+                    "vendor": meta.get("filament_vendor_name"),
+                    "name": meta.get("filament_name"),
+                    "color_hex": meta.get("filament_color_hex"),
+                }
+                self._attr_entity_picture = spool_entity_picture(self._hass, device.id)
+            else:
+                self._attr_extra_state_attributes = {}
+                self._attr_entity_picture = None
         if self.hass is not None:
             self.async_write_ha_state()
 

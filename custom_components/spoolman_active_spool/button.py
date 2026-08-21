@@ -36,11 +36,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ActiveSpoolCoordinator
-from .moonraker import async_set_active_spool
+from .moonraker import async_set_active_spool, async_set_lane_spool
 from .spoolman_registry import (
+    our_spool_device_identifier,
     printer_device_identifier,
     printer_object_id,
     spool_id_from_device,
+    spool_label,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -97,28 +99,38 @@ async def async_setup_entry(
         "coordinator"
     ]
     known_device_ids: set[str] = set()
+    lanes = coordinator.lanes  # detected during the first refresh, before setup
 
-    def _build_set_active_button(device: DeviceEntry) -> SetActiveSpoolButton | None:
+    def _build_set_active_buttons(device: DeviceEntry) -> list[SetActiveSpoolButton]:
         spool_id = spool_id_from_device(device)
         if spool_id is None:
-            return None
+            return []
         known_device_ids.add(device.id)
-        return SetActiveSpoolButton(hass, ent_reg, entry, coordinator, device, spool_id)
+        if not lanes:
+            return [SetActiveSpoolButton(hass, ent_reg, entry, coordinator, device, spool_id)]
+        return [
+            SetActiveSpoolButton(hass, ent_reg, entry, coordinator, device, spool_id, lane=lane)
+            for lane in lanes
+        ]
 
     initial_entities: list[ButtonEntity] = [
         ClearActiveSpoolButton(hass, ent_reg, entry, coordinator)
     ]
-    initial_entities += [
-        button
-        for device in device_reg.devices.values()
-        if (button := _build_set_active_button(device)) is not None
-    ]
+    if lanes:
+        initial_entities += [
+            ClearActiveSpoolButton(hass, ent_reg, entry, coordinator, lane=lane)
+            for lane in lanes
+        ]
+    for device in device_reg.devices.values():
+        initial_entities += _build_set_active_buttons(device)
 
     async_add_entities(initial_entities)
     _LOGGER.info(
-        "Spoolman Active Spool (%s): added %d spool button(s) + 1 clear button",
+        "Spoolman Active Spool (%s): added %d spool button(s) + %d clear button(s)%s",
         entry.title,
-        len(initial_entities) - 1,
+        len(initial_entities) - 1 - len(lanes),
+        1 + len(lanes),
+        f" across {len(lanes)} AFC lane(s)" if lanes else "",
     )
 
     @callback
@@ -128,13 +140,14 @@ async def async_setup_entry(
         device = device_reg.async_get(event.data["device_id"])
         if device is None:
             return
-        button = _build_set_active_button(device)
-        if button is not None:
+        buttons = _build_set_active_buttons(device)
+        if buttons:
             _LOGGER.info(
-                "Spoolman Active Spool (%s): new spool device detected, adding button",
+                "Spoolman Active Spool (%s): new spool device detected, adding %d button(s)",
                 entry.title,
+                len(buttons),
             )
-            async_add_entities([button])
+            async_add_entities(buttons)
 
     entry.async_on_unload(
         hass.bus.async_listen(
@@ -157,18 +170,40 @@ class SetActiveSpoolButton(ButtonEntity):
         coordinator: ActiveSpoolCoordinator,
         device: DeviceEntry,
         spool_id: int,
+        lane: str | None = None,
     ) -> None:
-        """Attach to the existing Spoolman device instead of creating a new one."""
+        """Attach to the existing Spoolman device instead of creating a new one.
+
+        lane=None is the original, single-extruder-printer behaviour
+        (unique_id/entity_id/name unchanged from before AFC lane support
+        existed). A given lane instead targets one AFC lane (e.g. a
+        4-extruder Snapmaker U1's E0-E3) via SET_SPOOL_ID, since there's no
+        per-tool equivalent of the plain "set active spool" Moonraker call.
+        """
         self._spool_id = spool_id
+        self._lane = lane
         self._coordinator = coordinator
         self._moonraker_url = coordinator.moonraker_url
         self._verify_ssl = coordinator.verify_ssl
+        self._api_key = coordinator.api_key
 
-        self._attr_unique_id = f"{entry.entry_id}_spool_{spool_id}_set_active"
-        self._attr_name = f"Nastav na {entry.title}"
-        self._attr_device_info = DeviceInfo(identifiers=device.identifiers)
+        printer_slug = printer_object_id(entry.title)
+        if lane is None:
+            self._attr_unique_id = f"{entry.entry_id}_spool_{spool_id}_set_active"
+            self._attr_name = f"Nastav na {entry.title}"
+            object_id = f"spoolman_spool_{spool_id}_set_active_{printer_slug}"
+        else:
+            self._attr_unique_id = f"{entry.entry_id}_spool_{spool_id}_set_active_{lane}"
+            self._attr_name = f"Nastav na {entry.title} ({lane})"
+            object_id = f"spoolman_spool_{spool_id}_set_active_{printer_slug}_{lane.lower()}"
 
-        object_id = f"spoolman_spool_{spool_id}_set_active_{printer_object_id(entry.title)}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={our_spool_device_identifier(spool_id)},
+            name=spool_label(hass, device, spool_id),
+            manufacturer="Spoolman",
+            model="Cívka",
+            via_device=next(iter(device.identifiers), None),
+        )
         self.entity_id = _resolve_entity_id(
             hass, ent_reg, self._attr_unique_id, object_id
         )
@@ -176,14 +211,25 @@ class SetActiveSpoolButton(ButtonEntity):
     async def async_press(self) -> None:
         """Tell this printer's Moonraker to use this spool as the active one."""
         try:
-            await async_set_active_spool(
-                self.hass, self._moonraker_url, self._verify_ssl, self._spool_id
-            )
+            if self._lane is None:
+                await async_set_active_spool(
+                    self.hass, self._moonraker_url, self._verify_ssl, self._spool_id, self._api_key
+                )
+            else:
+                await async_set_lane_spool(
+                    self.hass,
+                    self._moonraker_url,
+                    self._verify_ssl,
+                    self._lane,
+                    self._spool_id,
+                    self._api_key,
+                )
         except aiohttp.ClientError as err:
             _LOGGER.error(
-                "Failed to set spool %s as active on %s: %s",
+                "Failed to set spool %s as active on %s%s: %s",
                 self._spool_id,
                 self._moonraker_url,
+                f" lane {self._lane}" if self._lane else "",
                 err,
             )
             raise
@@ -205,33 +251,51 @@ class ClearActiveSpoolButton(CoordinatorEntity[ActiveSpoolCoordinator], ButtonEn
         ent_reg: er.EntityRegistry,
         entry: ConfigEntry,
         coordinator: ActiveSpoolCoordinator,
+        lane: str | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._moonraker_url = coordinator.moonraker_url
         self._verify_ssl = coordinator.verify_ssl
+        self._api_key = coordinator.api_key
+        self._lane = lane
 
-        self._attr_unique_id = f"{entry.entry_id}_active_spool_clear"
-        self._attr_name = "Vymaž aktivní cívku"
+        printer_slug = printer_object_id(entry.title)
+        if lane is None:
+            self._attr_unique_id = f"{entry.entry_id}_active_spool_clear"
+            self._attr_name = "Vymaž aktivní cívku"
+            object_id = f"spoolman_active_{printer_slug}_spool_clear"
+        else:
+            self._attr_unique_id = f"{entry.entry_id}_active_spool_clear_{lane}"
+            self._attr_name = f"Vymaž aktivní cívku ({lane})"
+            object_id = f"spoolman_active_{printer_slug}_{lane.lower()}_spool_clear"
+
         self._attr_device_info = DeviceInfo(
             identifiers={printer_device_identifier(entry.entry_id)},
             name=entry.title,
             manufacturer="Spoolman Active Spool (Moonraker)",
             model="Tiskárna",
         )
-        object_id = f"spoolman_active_{printer_object_id(entry.title)}_spool_clear"
         self.entity_id = _resolve_entity_id(
             hass, ent_reg, self._attr_unique_id, object_id
         )
 
     async def async_press(self) -> None:
-        """Unset the active spool on this printer."""
+        """Unset the active spool on this printer (or, with a lane, just that lane)."""
         try:
-            await async_set_active_spool(
-                self.hass, self._moonraker_url, self._verify_ssl, None
-            )
+            if self._lane is None:
+                await async_set_active_spool(
+                    self.hass, self._moonraker_url, self._verify_ssl, None, self._api_key
+                )
+            else:
+                await async_set_lane_spool(
+                    self.hass, self._moonraker_url, self._verify_ssl, self._lane, None, self._api_key
+                )
         except aiohttp.ClientError as err:
             _LOGGER.error(
-                "Failed to clear active spool on %s: %s", self._moonraker_url, err
+                "Failed to clear active spool on %s%s: %s",
+                self._moonraker_url,
+                f" lane {self._lane}" if self._lane else "",
+                err,
             )
             raise
         await asyncio.sleep(2)

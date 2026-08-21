@@ -25,7 +25,12 @@ from homeassistant.helpers.device_registry import DeviceEntry, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .spoolman_registry import printer_device_identifier, spool_id_from_device
+from .spoolman_registry import (
+    our_spool_device_identifier,
+    printer_device_identifier,
+    spool_id_from_device,
+    spool_label,
+)
 from .webhook_hub import spool_qr_url, webhook_full_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,7 +128,13 @@ class SpoolQrImage(ImageEntity):
         self._attr_unique_id = f"{entry.entry_id}_spool_{spool_id}_qr"
         self._attr_name = "QR kód"
         self.entity_id = f"image.spoolman_spool_{spool_id}_qr_code"
-        self._attr_device_info = DeviceInfo(identifiers=device.identifiers)
+        self._attr_device_info = DeviceInfo(
+            identifiers={our_spool_device_identifier(spool_id)},
+            name=spool_label(hass, device, spool_id),
+            manufacturer="Spoolman",
+            model="Cívka",
+            via_device=next(iter(device.identifiers), None),
+        )
         self._attr_content_type = CONTENT_TYPE
         self._attr_image_last_updated = dt_util.utcnow()
         self._cached_image = Image(

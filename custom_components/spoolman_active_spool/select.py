@@ -25,7 +25,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ActiveSpoolCoordinator
-from .moonraker import async_set_active_spool
+from .moonraker import async_set_active_spool, async_set_lane_spool
 from .spoolman_registry import (
     iter_spool_devices,
     printer_device_identifier,
@@ -47,7 +47,12 @@ async def async_setup_entry(
     coordinator: ActiveSpoolCoordinator = hass.data[DOMAIN][entry.entry_id][
         "coordinator"
     ]
-    async_add_entities([ActiveSpoolSelect(hass, entry, coordinator)])
+    entities: list[ActiveSpoolSelect] = [ActiveSpoolSelect(hass, entry, coordinator)]
+    entities += [
+        ActiveSpoolSelect(hass, entry, coordinator, lane=lane)
+        for lane in coordinator.lanes
+    ]
+    async_add_entities(entities)
 
 
 class ActiveSpoolSelect(CoordinatorEntity[ActiveSpoolCoordinator], SelectEntity):
@@ -57,7 +62,11 @@ class ActiveSpoolSelect(CoordinatorEntity[ActiveSpoolCoordinator], SelectEntity)
     _attr_icon = ICON
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, coordinator: ActiveSpoolCoordinator
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: ActiveSpoolCoordinator,
+        lane: str | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._hass = hass
@@ -65,16 +74,23 @@ class ActiveSpoolSelect(CoordinatorEntity[ActiveSpoolCoordinator], SelectEntity)
         self._dev_reg = dr.async_get(hass)
         self._moonraker_url = coordinator.moonraker_url
         self._verify_ssl = coordinator.verify_ssl
+        self._api_key = coordinator.api_key
+        self._lane = lane
 
         # label -> spool_id, rebuilt whenever spool devices appear/disappear
         self._label_by_spool_id: dict[int, str] = {}
         self._spool_id_by_label: dict[str, int] = {}
 
-        self._attr_unique_id = f"{entry.entry_id}_active_spool_select"
-        self._attr_name = "Aktivní cívka"
-        self.entity_id = (
-            f"select.spoolman_active_{printer_object_id(entry.title)}_spool"
-        )
+        printer_slug = printer_object_id(entry.title)
+        if lane is None:
+            self._attr_unique_id = f"{entry.entry_id}_active_spool_select"
+            self._attr_name = "Aktivní cívka"
+            self.entity_id = f"select.spoolman_active_{printer_slug}_spool"
+        else:
+            self._attr_unique_id = f"{entry.entry_id}_active_spool_select_{lane}"
+            self._attr_name = f"Aktivní cívka ({lane})"
+            self.entity_id = f"select.spoolman_active_{printer_slug}_{lane.lower()}_spool"
+
         self._attr_device_info = DeviceInfo(
             identifiers={printer_device_identifier(entry.entry_id)},
             name=entry.title,
@@ -123,8 +139,15 @@ class ActiveSpoolSelect(CoordinatorEntity[ActiveSpoolCoordinator], SelectEntity)
 
         self._attr_options = [NO_SELECTION, *self._label_by_spool_id.values()]
 
+    def _current_spool_id(self) -> int | None:
+        if not self.coordinator.data:
+            return None
+        if self._lane is None:
+            return self.coordinator.data.get("spool_id")
+        return self.coordinator.data.get("lane_spool_ids", {}).get(self._lane)
+
     def _refresh_current_option(self) -> None:
-        spool_id = self.coordinator.data.get("spool_id") if self.coordinator.data else None
+        spool_id = self._current_spool_id()
         self._attr_current_option = (
             self._label_by_spool_id.get(spool_id, NO_SELECTION)
             if spool_id is not None
@@ -147,12 +170,25 @@ class ActiveSpoolSelect(CoordinatorEntity[ActiveSpoolCoordinator], SelectEntity)
             return
 
         try:
-            await async_set_active_spool(
-                self._hass, self._moonraker_url, self._verify_ssl, spool_id
-            )
+            if self._lane is None:
+                await async_set_active_spool(
+                    self._hass, self._moonraker_url, self._verify_ssl, spool_id, self._api_key
+                )
+            else:
+                await async_set_lane_spool(
+                    self._hass,
+                    self._moonraker_url,
+                    self._verify_ssl,
+                    self._lane,
+                    spool_id,
+                    self._api_key,
+                )
         except aiohttp.ClientError as err:
             _LOGGER.error(
-                "Failed to set active spool on %s: %s", self._moonraker_url, err
+                "Failed to set active spool on %s%s: %s",
+                self._moonraker_url,
+                f" lane {self._lane}" if self._lane else "",
+                err,
             )
             raise
 

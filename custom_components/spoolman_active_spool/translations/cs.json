@@ -16,7 +16,8 @@
           "name": "Název tiskárny",
           "moonraker_url": "URL Moonrakeru (např. http://192.168.1.50:7125)",
           "verify_ssl": "Ověřovat SSL certifikát",
-          "poll_interval": "Interval kontroly aktivní cívky (sekundy)"
+          "poll_interval": "Interval kontroly aktivní cívky (sekundy)",
+          "api_key": "API klíč Moonrakeru (nepovinné - jen když Moonraker vyžaduje přihlášení)"
         }
       },
       "reconfigure_printer": {
@@ -26,7 +27,8 @@
           "name": "Název tiskárny",
           "moonraker_url": "URL Moonrakeru (např. http://192.168.1.50:7125)",
           "verify_ssl": "Ověřovat SSL certifikát",
-          "poll_interval": "Interval kontroly aktivní cívky (sekundy)"
+          "poll_interval": "Interval kontroly aktivní cívky (sekundy)",
+          "api_key": "API klíč Moonrakeru (nepovinné - jen když Moonraker vyžaduje přihlášení)"
         }
       },
       "webhook": {
@@ -50,6 +52,7 @@
     },
     "error": {
       "cannot_connect": "Nepodařilo se spojit s Moonrakerem, nebo v něm není nakonfigurovaná komponenta [spoolman].",
+      "invalid_auth": "Moonraker vyžaduje přihlášení - API klíč chybí nebo není platný.",
       "unknown": "Neočekávaná chyba, zkontroluj prosím log.",
       "invalid_webhook_id": "Webhook ID smí obsahovat jen písmena, čísla, pomlčky a podtržítka (8-64 znaků).",
       "webhook_id_taken": "Toto webhook ID už je v Home Assistantu použité, zvol jiné."

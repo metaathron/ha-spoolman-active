@@ -56,6 +56,7 @@ of each as you need:
    - Moonraker URL of that printer (e.g. `http://192.168.1.50:7125`)
    - Whether to verify the SSL certificate (turn off if Moonraker sits behind a reverse proxy with a self-signed certificate)
    - How often to poll Moonraker for the active spool_id (default 30s)
+   - **Moonraker API key** (optional) - only needed if that Moonraker instance has login/authentication enforced (`force_logins` or no trusted clients); sent as an `X-Api-Key` header on every request. Leave empty for a Moonraker that allows unauthenticated local access, which is the default.
 3. Add the integration again, once per additional printer - every spool then gets one extra button, one per printer.
 
 The printer's name, URL, SSL verification and poll interval can be changed
@@ -64,6 +65,32 @@ remove and re-add it. Renaming the printer also renames the buttons'
 `entity_id`. The printer's slugified name (`<printer>` below - spaces →
 underscores, diacritics stripped, e.g. "Voron 2.4" → `voron_24`) is what
 identifies it in webhook URLs.
+
+#### Multi-extruder printers (AFC lanes)
+
+Printers exposing Klipper "AFC_lane" status objects - as a 4-extruder
+[Snapmaker U1](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware)
+running the community Extended Firmware's AFC-Lite/SpoolLink stub does, one
+lane per extruder (`E0`-`E3`) - are **auto-detected**, no setting to turn
+on. Nothing to configure and nothing changes for ordinary single-extruder
+printers, which simply have no such objects.
+
+For each detected lane, on top of the printer-wide entities above, you get:
+
+- `button.spoolman_spool_<spool_id>_set_active_<printer>_<lane>` - one per
+  spool per lane (instead of a single per-printer button).
+- `select.spoolman_active_<printer>_<lane>_spool` - dropdown, same as the
+  printer-wide one but scoped to that lane.
+- `sensor.spoolman_active_<printer>_<lane>_spool` - the lane's current
+  spool id, with material/vendor/name/colour as attributes.
+- `button.spoolman_active_<printer>_<lane>_spool_clear` - clears just that
+  lane.
+
+Setting/clearing a lane's spool uses Moonraker's generic gcode endpoint to
+run `SET_SPOOL_ID LANE=<lane> SPOOL_ID=<id>` (`0` to clear) - the
+AFC-Lite/SpoolLink macro, since stock Moonraker has no per-tool equivalent
+of `/server/spoolman/spool_id` yet. Reading a lane's current spool queries
+Moonraker's generic `AFC_lane <name>` printer object.
 
 ### QR links (webhook hub)
 
@@ -101,7 +128,7 @@ further down).
 **A. Query-string webhook - the primary, most-featured shape:**
 
 ```
-.../api/webhook/<webhook_id>?spool_id=<spool_id>&printer=<printer>
+.../api/webhook/<webhook_id>?spool_id=<spool_id>&printer=<printer>&lane=<lane>
 ```
 
 | Parameter | Required? | Meaning | If missing (default) |
@@ -109,11 +136,12 @@ further down).
 | `<webhook_id>` | yes (part of the path) | Identifies which hub entry - fixed per hub, set in its "Webhook ID" field. | - |
 | `spool_id` | no | Integer spool id. | Switches to the **remove active spool** flow instead of "set" (no spool card shown, printer picker still shown). |
 | `printer` | no | The target printer's slugified name (see above). | Shows the printer picker page instead of applying anything; the change only happens once the picker's form is submitted (POST). |
+| `lane` | only for printers with [AFC lanes](#multi-extruder-printers-afc-lanes) | The target lane's name (e.g. `E0`). Ignored entirely for printers without lanes. | Once a lane-having printer is known (via `printer=`, or by submitting the printer picker), shows a second picker - "which lane" - instead of applying anything. |
 
 **B. Spoolman-compatible path - for stock Spoolman's built-in label printer:**
 
 ```
-.../api/webhook/<webhook_id>/spool/show/<spool_id>?printer=<printer>
+.../api/webhook/<webhook_id>/spool/show/<spool_id>?printer=<printer>&lane=<lane>
 ```
 
 | Parameter | Required? | Meaning | If missing (default) |
@@ -121,6 +149,7 @@ further down).
 | `<webhook_id>` | yes (part of the path) | Same as above. | - |
 | `<spool_id>` | yes (part of the path) | Integer spool id. There is no "remove" equivalent for this shape - it always needs a spool id in the path; use shape A without `spool_id` for removing (e.g. via the `image.spoolman_qr_remove_active_spool` entity). | - |
 | `printer` | no | Same meaning as in shape A. | Same as in shape A - shows the picker. |
+| `lane` | only for printers with AFC lanes | Same meaning as in shape A. | Same as in shape A - shows the lane picker. |
 
 Behaves identically to shape A from the picker onward (same printer list,
 same POST-safety, same live "offline" hint) - it exists purely to match the
@@ -189,6 +218,13 @@ use those otherwise side-effecting links.
   reachable from Home Assistant over the network.
 - The `qrcode` Python package (installed automatically) if you use the QR
   links hub.
+- For [multi-extruder AFC lane support](#multi-extruder-printers-afc-lanes)
+  specifically: a Klipper setup exposing `AFC_lane <name>` printer objects
+  and the `SET_SPOOL_ID` gcode macro - as provided by the community
+  [SnapmakerU1-Extended-Firmware](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware)'s
+  AFC-Lite/SpoolLink stub on a Snapmaker U1, or the real
+  [AFC-Klipper-Add-On](https://github.com/ArmoredTurtle/AFC-Klipper-Add-On)
+  elsewhere. Printers without either simply have no lanes detected.
 
 ---
 
@@ -227,6 +263,14 @@ For every configured printer, it also creates one device ("Printer
   whatever is set active some other way (a macro, Mainsail, one of the
   per-spool buttons) once the next poll comes in.
 
+For printers with [AFC lanes](#multi-extruder-printers-afc-lanes) detected,
+each lane additionally gets its own
+`sensor.spoolman_active_<printer>_<lane>_spool`,
+`select.spoolman_active_<printer>_<lane>_spool`,
+`button.spoolman_active_<printer>_<lane>_spool_clear`, and every spool gets
+one `button.spoolman_spool_<spool_id>_set_active_<printer>_<lane>` per lane
+(instead of a single per-printer button).
+
 The QR links hub creates:
 
 - `sensor.spoolman_qr_webhook_url` - diagnostic sensor showing the base
@@ -262,6 +306,11 @@ The QR links hub creates:
   quick, short-timeout check against that printer's Moonraker) if it can't
   currently be reached - informational only, the button stays clickable
   either way.
+- Multi-extruder printers exposing Klipper AFC lane status (e.g. a
+  4-extruder Snapmaker U1) are auto-detected - one full set of
+  active-spool entities per lane, and the QR/webhook picker gains a
+  "which lane" step - with zero effect on ordinary single-extruder
+  printers.
 
 ## Notes
 

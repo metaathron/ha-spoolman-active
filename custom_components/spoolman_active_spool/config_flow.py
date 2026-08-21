@@ -24,6 +24,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import NumberSelector, NumberSelectorConfig
 
 from .const import (
+    CONF_API_KEY,
     CONF_BASE_URL,
     CONF_ENTRY_TYPE,
     CONF_LOCAL_ONLY,
@@ -74,18 +75,25 @@ def _connection_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             ): NumberSelector(
                 NumberSelectorConfig(min=MIN_POLL_INTERVAL, max=3600, step=1, unit_of_measurement="s")
             ),
+            vol.Optional(
+                CONF_API_KEY, default=defaults.get(CONF_API_KEY, "")
+            ): str,
         }
     )
 
 
-async def _validate_moonraker(hass: HomeAssistant, url: str, verify_ssl: bool) -> None:
+async def _validate_moonraker(
+    hass: HomeAssistant, url: str, verify_ssl: bool, api_key: str | None = None
+) -> None:
     """Ping Moonraker's spoolman status endpoint. Raises on failure."""
     session = async_get_clientsession(hass)
     check_url = f"{url}/server/spoolman/status"
     ssl_kwarg: dict[str, Any] = {} if verify_ssl else {"ssl": False}
+    headers = {"X-Api-Key": api_key} if api_key else {}
     async with session.get(
         check_url,
         timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        headers=headers,
         **ssl_kwarg,
     ) as response:
         response.raise_for_status()
@@ -164,8 +172,15 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_try_connect_printer(self, data: dict[str, Any]) -> dict[str, str]:
         try:
             await _validate_moonraker(
-                self.hass, data[CONF_MOONRAKER_URL], data[CONF_VERIFY_SSL]
+                self.hass,
+                data[CONF_MOONRAKER_URL],
+                data[CONF_VERIFY_SSL],
+                data.get(CONF_API_KEY) or None,
             )
+        except aiohttp.ClientResponseError as err:
+            if err.status in (401, 403):
+                return {"base": "invalid_auth"}
+            return {"base": "cannot_connect"}
         except aiohttp.ClientError:
             return {"base": "cannot_connect"}
         except TimeoutError:
@@ -180,6 +195,7 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
         user_input[CONF_NAME] = user_input[CONF_NAME].strip()
         user_input[CONF_MOONRAKER_URL] = _normalize_url(user_input[CONF_MOONRAKER_URL])
         user_input[CONF_POLL_INTERVAL] = int(user_input[CONF_POLL_INTERVAL])
+        user_input[CONF_API_KEY] = user_input.get(CONF_API_KEY, "").strip()
         return user_input
 
     async def async_step_printer(
@@ -200,6 +216,7 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_MOONRAKER_URL: user_input[CONF_MOONRAKER_URL],
                         CONF_VERIFY_SSL: user_input[CONF_VERIFY_SSL],
                         CONF_POLL_INTERVAL: user_input[CONF_POLL_INTERVAL],
+                        CONF_API_KEY: user_input[CONF_API_KEY],
                     },
                 )
 
@@ -227,6 +244,7 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_MOONRAKER_URL: user_input[CONF_MOONRAKER_URL],
                         CONF_VERIFY_SSL: user_input[CONF_VERIFY_SSL],
                         CONF_POLL_INTERVAL: user_input[CONF_POLL_INTERVAL],
+                        CONF_API_KEY: user_input[CONF_API_KEY],
                     },
                 )
 
@@ -242,6 +260,7 @@ class SpoolmanActiveSpoolConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_POLL_INTERVAL: reconfigure_entry.data.get(
                         CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
                     ),
+                    CONF_API_KEY: reconfigure_entry.data.get(CONF_API_KEY, ""),
                 }
             ),
             errors=errors,

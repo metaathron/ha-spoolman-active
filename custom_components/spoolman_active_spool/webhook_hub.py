@@ -32,6 +32,16 @@ links) is still the recommended default. It is registered as a separate
 HTTP view, not through the webhook component itself, because that
 component only ever routes the bare /api/webhook/<webhook_id> path with no
 extra path segment.
+
+For printers with detected AFC lanes (e.g. a 4-extruder Snapmaker U1 running
+the community Extended Firmware's AFC-Lite/SpoolLink stub - see
+coordinator.py), an extra "&lane=<name>" parameter (e.g. "E0") targets one
+specific lane instead of the printer as a whole. If a lane-having printer is
+resolved (via "&printer=<stub>" on GET, or by submitting the printer picker
+on POST) and no lane was given, the page shows a second picker - "which
+lane" - instead of applying anything, the same POST-safety rules as the
+printer picker itself. Printers with no lanes are entirely unaffected;
+"lane" is simply ignored for them.
 """
 
 from __future__ import annotations
@@ -68,7 +78,7 @@ from .const import (
     ENTRY_TYPE_HUB,
     ENTRY_TYPE_PRINTER,
 )
-from .moonraker import async_check_online, async_set_active_spool
+from .moonraker import async_check_online, async_set_active_spool, async_set_lane_spool
 from .spoolman_registry import (
     find_spool_device,
     printer_entries,
@@ -599,31 +609,40 @@ def _spool_card_html(hass: HomeAssistant, spool_id: int, lang: str) -> tuple[str
     return label, card
 
 
+def _spool_status_badge(
+    hass: HomeAssistant, spool_id: int | None, lang: str
+) -> tuple[str, str]:
+    """(current_text, icon_html) for "what's currently loaded here" - shared
+    by the printer picker and the per-lane picker below."""
+    if spool_id is None:
+        return _t(lang, "empty_spool"), _spool_icon_html(None, "spool-badge", empty=True)
+    info = _spool_info(hass, spool_id, lang)
+    if info is None:
+        return (
+            _t(lang, "unknown_spool", id=spool_id),
+            _spool_icon_html(None, "spool-badge", empty=True),
+        )
+    text = f"{info['material']} - {info['vendor']} - {info['name']}"
+    icon = _spool_icon_html(
+        info["color_hex"],
+        "spool-badge",
+        multi_hexes=info["multi_hexes"],
+        multi_direction=info["multi_direction"],
+    )
+    return text, icon
+
+
 async def _printer_button_html(hass: HomeAssistant, entry: ConfigEntry, lang: str) -> str:
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     current_spool_id = coordinator.data.get("spool_id") if coordinator.data else None
-
-    if current_spool_id is None:
-        current_text = _t(lang, "empty_spool")
-        icon_html = _spool_icon_html(None, "spool-badge", empty=True)
-    else:
-        info = _spool_info(hass, current_spool_id, lang)
-        if info is None:
-            current_text = _t(lang, "unknown_spool", id=current_spool_id)
-            icon_html = _spool_icon_html(None, "spool-badge", empty=True)
-        else:
-            current_text = f"{info['material']} - {info['vendor']} - {info['name']}"
-            icon_html = _spool_icon_html(
-                info["color_hex"],
-                "spool-badge",
-                multi_hexes=info["multi_hexes"],
-                multi_direction=info["multi_direction"],
-            )
+    current_text, icon_html = _spool_status_badge(hass, current_spool_id, lang)
 
     # Best-effort, live check - purely informational, never disables the
     # button (the check itself can be flaky/slow; the actual set/clear
     # action gets its own proper error handling in _apply_spool_and_render).
-    online = await async_check_online(hass, coordinator.moonraker_url, coordinator.verify_ssl)
+    online = await async_check_online(
+        hass, coordinator.moonraker_url, coordinator.verify_ssl, coordinator.api_key
+    )
     offline_badge = (
         "" if online else f'<span class="printer-offline">{html.escape(_t(lang, "printer_offline"))}</span>'
     )
@@ -637,6 +656,26 @@ async def _printer_button_html(hass: HomeAssistant, entry: ConfigEntry, lang: st
         f'<span class="printer-name">{html.escape(entry.title)}</span>'
         f"{offline_badge}"
         "</span>"
+        f'<span class="printer-current">{html.escape(current_text)}</span>'
+        "</span>"
+        "</button>"
+    )
+
+
+def _lane_button_html(hass: HomeAssistant, entry: ConfigEntry, lane: str, lang: str) -> str:
+    """One lane's button in the (second-step) lane picker - same visual
+    style as a printer button, showing what's currently in that lane."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    current_spool_id = (
+        coordinator.data.get("lane_spool_ids", {}).get(lane) if coordinator.data else None
+    )
+    current_text, icon_html = _spool_status_badge(hass, current_spool_id, lang)
+    return (
+        '<button type="submit" class="printer-btn" '
+        f'name="lane" value="{html.escape(lane)}">'
+        f"{icon_html}"
+        '<span class="printer-text">'
+        f'<span class="printer-name">{html.escape(lane)}</span>'
         f'<span class="printer-current">{html.escape(current_text)}</span>'
         "</span>"
         "</button>"
@@ -676,7 +715,8 @@ async def _handle_get(
         if entry is None:
             err = _t(lang, "err_invalid_printer")
             return _page(_t(lang, "title_error"), f"<p class='err'>{html.escape(err)}</p>", lang)
-        return await _apply_spool_and_render(hass, entry, spool_id, lang)
+        lane = request.query.get("lane") or None
+        return await _apply_or_ask_lane(hass, entry, spool_id, lang, lane)
 
     if raw_spool_id is None:
         # No spool_id, no printer -> "remove the active spool" picker, not an error.
@@ -715,6 +755,63 @@ async def _render_picker(
     return _page(title, body, lang)
 
 
+def _render_lane_picker(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    lanes: list[str],
+    spool_id: int | None,
+    lang: str,
+    info_html: str,
+) -> web.Response:
+    """Second-step picker for a printer with AFC lanes - shown once the
+    printer is known but which lane isn't yet."""
+    hidden = (
+        (f'<input type="hidden" name="spool_id" value="{spool_id}">' if spool_id is not None else "")
+        + f'<input type="hidden" name="printer_entry_id" value="{html.escape(entry.entry_id)}">'
+    )
+    prompt = _t(
+        lang, "prompt_remove_lane" if spool_id is None else "prompt_set_lane", printer=entry.title
+    )
+    buttons = "".join(_lane_button_html(hass, entry, lane, lang) for lane in lanes)
+    body = (
+        f"{info_html}"
+        f'<form method="post">{hidden}'
+        f'<p class="prompt">{html.escape(prompt)}</p>'
+        f'<div class="printer-list">{buttons}</div>'
+        "</form>"
+    )
+    title = _t(lang, "title_remove" if spool_id is None else "title_set")
+    return _page(title, body, lang)
+
+
+async def _apply_or_ask_lane(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    spool_id: int | None,
+    lang: str,
+    lane: str | None,
+) -> web.Response:
+    """Once a printer is resolved (picker submission, or "&printer=" on
+    GET): apply immediately for a lane-less printer (unchanged behaviour);
+    for a printer with AFC lanes, apply only once "lane" is also known,
+    otherwise show the lane picker instead."""
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    lanes = coordinator.lanes
+    if not lanes:
+        return await _apply_spool_and_render(hass, entry, spool_id, lang)
+
+    if lane:
+        if lane not in lanes:
+            err = _t(lang, "err_invalid_lane")
+            return _page(_t(lang, "title_error"), f"<p class='err'>{html.escape(err)}</p>", lang)
+        return await _apply_spool_and_render(hass, entry, spool_id, lang, lane=lane)
+
+    info_html = ""
+    if spool_id is not None:
+        _, info_html = _spool_card_html(hass, spool_id, lang)
+    return _render_lane_picker(hass, entry, lanes, spool_id, lang, info_html)
+
+
 async def _handle_post(hass: HomeAssistant, request: web.Request) -> web.Response:
     lang = _lang(hass)
     form = await request.post()
@@ -737,16 +834,24 @@ async def _handle_post(hass: HomeAssistant, request: web.Request) -> web.Respons
         err = _t(lang, "err_invalid_printer")
         return _page(_t(lang, "title_error"), f"<p class='err'>{html.escape(err)}</p>", lang)
 
-    return await _apply_spool_and_render(hass, entry, spool_id, lang)
+    lane = form.get("lane")
+    lane = str(lane) if lane else None
+    return await _apply_or_ask_lane(hass, entry, spool_id, lang, lane)
 
 
 async def _apply_spool_and_render(
-    hass: HomeAssistant, entry: ConfigEntry, spool_id: int | None, lang: str
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    spool_id: int | None,
+    lang: str,
+    lane: str | None = None,
 ) -> web.Response:
-    """Set (or clear) the active spool on one printer and render the result
-    page - the actual side-effecting step behind both the form POST and a
-    direct GET that includes ?printer=<stub>."""
+    """Set (or clear) the active spool on one printer (or, with a lane, on
+    one AFC lane of it) and render the result page - the actual
+    side-effecting step behind both the form POST and a direct GET that
+    includes ?printer=<stub>."""
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    printer_label = entry.title if lane is None else f"{entry.title} ({lane})"
 
     if spool_id is not None:
         label, _ = _spool_card_html(hass, spool_id, lang)
@@ -754,32 +859,51 @@ async def _apply_spool_and_render(
         label = None
 
     try:
-        await async_set_active_spool(
-            hass, coordinator.moonraker_url, coordinator.verify_ssl, spool_id
-        )
+        if lane is None:
+            await async_set_active_spool(
+                hass,
+                coordinator.moonraker_url,
+                coordinator.verify_ssl,
+                spool_id,
+                coordinator.api_key,
+            )
+        else:
+            await async_set_lane_spool(
+                hass,
+                coordinator.moonraker_url,
+                coordinator.verify_ssl,
+                lane,
+                spool_id,
+                coordinator.api_key,
+            )
     except aiohttp.ClientError as err:
         action = _t(lang, "action_remove" if spool_id is None else "action_set")
         msg = _t(lang, "err_action_failed", action=action, err=str(err))
         status_html = f'<div class="status err">❌ {html.escape(msg)}</div>'
     else:
         if spool_id is None:
-            msg = _t(lang, "ok_removed", printer=entry.title)
+            msg = _t(lang, "ok_removed", printer=printer_label)
         else:
             spool_text = label or _t(lang, "unknown_spool", id=spool_id)
-            msg = _t(lang, "ok_set", spool=spool_text, printer=entry.title)
+            msg = _t(lang, "ok_set", spool=spool_text, printer=printer_label)
         status_html = f'<div class="status ok">✅ {html.escape(msg)}</div>'
 
     await asyncio.sleep(2)
     await coordinator.async_request_refresh()
 
-    current_spool_id = coordinator.data.get("spool_id") if coordinator.data else None
+    if lane is None:
+        current_spool_id = coordinator.data.get("spool_id") if coordinator.data else None
+    else:
+        current_spool_id = (
+            coordinator.data.get("lane_spool_ids", {}).get(lane) if coordinator.data else None
+        )
     if current_spool_id is not None:
         current_label, _ = _spool_card_html(hass, current_spool_id, lang)
         current_text = current_label or _t(lang, "unknown_spool", id=current_spool_id)
     else:
         current_text = _t(lang, "no_active_spool")
 
-    current_line = _t(lang, "current_on", printer=entry.title, spool=current_text)
+    current_line = _t(lang, "current_on", printer=printer_label, spool=current_text)
     body = f"{status_html}<p class=\"muted-line\">{html.escape(current_line)}</p>"
     return _page(_t(lang, "title_result"), body, lang)
 

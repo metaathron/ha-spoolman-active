@@ -20,6 +20,10 @@ CONF_NAME = "name"
 CONF_MOONRAKER_URL = "moonraker_url"
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_POLL_INTERVAL = "poll_interval"
+# Optional - only needed if Moonraker has "force_logins"/trusted-client auth
+# disabled and requires an API key on every request. Empty/absent means "no
+# key sent", same as before this existed.
+CONF_API_KEY = "api_key"
 
 CONF_WEBHOOK_ID = "webhook_id"
 CONF_LOCAL_ONLY = "local_only"
@@ -37,3 +41,12 @@ REQUEST_TIMEOUT = 10
 # so a dead printer doesn't stall page rendering; a timeout just means the
 # page shows an "offline" hint, it never blocks the actual set/clear action.
 ONLINE_CHECK_TIMEOUT = 2
+
+# Klipper printer-object name prefix used by the AFC-Klipper-Add-On (and its
+# AFC-Lite stub, as shipped by Snapmaker U1's community Extended Firmware)
+# for per-extruder ("lane") status - e.g. "AFC_lane E0". Auto-detecting
+# these via /printer/objects/list is what lets multi-extruder printers (like
+# a 4-extruder Snapmaker U1) get one set of active-spool entities per lane,
+# while single-extruder printers - which simply have no such objects - see
+# no change at all.
+AFC_LANE_OBJECT_PREFIX = "AFC_lane "
