@@ -7,6 +7,7 @@
 ### Fixed
 
 - Devices could get a placeholder name (e.g. "? - ? - Cívka 18") right after a Home Assistant restart, only fixing itself after manually reloading the integration. This integration now waits for the Spoolman integration to finish loading first, so its entities' attributes are already populated by the time our devices get their names.
+- Mirrored sensors with a timestamp/date device class (e.g. Spoolman's "registered" sensor) crashed every coordinator update with `'str' object has no attribute 'tzinfo'`. Mirrored values are now parsed into a real datetime/date object instead of copied as plain text.
 
 ### Upgrading
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
@@ -30,6 +30,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HUB, ENTRY_TYPE_PRINTER
 from .coordinator import ActiveSpoolCoordinator
@@ -55,6 +56,22 @@ def _friendly_name(suffix: str) -> str:
     if suffix == "id":
         return "Aktivní cívka"
     return suffix.replace("_", " ").capitalize()
+
+
+def _coerce_mirrored_value(raw_state: str, device_class: str | None) -> Any:
+    """A mirror copies the source entity's raw (always-a-string) state
+    as-is, which is fine for plain values but breaks for timestamp/date
+    device classes - SensorEntity requires an actual datetime/date object
+    for those, not the ISO-format string HA's state machine always stores.
+    Parsed the same way HA's own helpers do; on a parse failure this falls
+    back to the raw string rather than raising, so a genuinely malformed
+    value just shows up oddly instead of crashing the whole update.
+    """
+    if device_class == SensorDeviceClass.TIMESTAMP:
+        return dt_util.parse_datetime(raw_state) or raw_state
+    if device_class == SensorDeviceClass.DATE:
+        return dt_util.parse_date(raw_state) or raw_state
+    return raw_state
 
 
 async def async_setup_entry(
@@ -250,11 +267,13 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
             self._attr_icon = None
             self._attr_entity_picture = None
         else:
-            self._attr_native_value = state.state
             self._attr_native_unit_of_measurement = state.attributes.get(
                 "unit_of_measurement"
             )
             self._attr_device_class = state.attributes.get("device_class")
+            self._attr_native_value = _coerce_mirrored_value(
+                state.state, self._attr_device_class
+            )
             self._attr_icon = state.attributes.get("icon")
             self._attr_entity_picture = state.attributes.get("entity_picture")
         # Same colour swatch/photo as the Spoolman integration's own entity
