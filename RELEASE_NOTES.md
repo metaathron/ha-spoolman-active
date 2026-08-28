@@ -1,3 +1,17 @@
+## v1.5.0
+
+### New
+
+- The "Aktivní cívka" sensor (and each AFC lane's sensor) now carries *every* attribute Spoolman exposes for the active spool - weight, price, lot number, comment, dates, filament details, whatever it has - not just a fixed material/vendor/name/colour subset. Usable standalone without looking up the spool's own device.
+
+### Fixed
+
+- Devices could get a placeholder name (e.g. "? - ? - Cívka 18") right after a Home Assistant restart, only fixing itself after manually reloading the integration. This integration now waits for the Spoolman integration to finish loading first, so its entities' attributes are already populated by the time our devices get their names.
+
+### Upgrading
+
+No action needed.
+
 ## v1.4.0
 
 ### New

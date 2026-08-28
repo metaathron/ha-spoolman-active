@@ -8,6 +8,7 @@ integration's own coordinator keeps it up to date.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -150,6 +151,51 @@ def spool_meta_attrs(hass: HomeAssistant, device_id: str) -> dict[str, str]:
                     found[key] = value
         if len(found) == len(SPOOL_META_ATTR_KEYS):
             break
+    return found
+
+
+# HA-standard/rendering keys that show up on Spoolman's sensor states but
+# are meaningless (or actively confusing) copied verbatim as another
+# entity's custom attributes - excluded from spool_all_attrs() below.
+_NON_DATA_ATTR_KEYS = frozenset(
+    {
+        "unit_of_measurement",
+        "device_class",
+        "icon",
+        "friendly_name",
+        "entity_picture",
+        "state_class",
+        "attribution",
+        "assumed_state",
+    }
+)
+
+
+def spool_all_attrs(hass: HomeAssistant, device_id: str) -> dict[str, Any]:
+    """Every attribute Spoolman's own integration exposes for one spool,
+    merged from *every* sensor entity of that spool's device (first value
+    wins on key collisions) - material, vendor, colour, weight, price, lot
+    number, comment, dates, whatever Spoolman happens to expose today or
+    adds later. Unlike spool_meta_attrs()'s curated subset, this is meant
+    to be a complete passthrough, so callers can mirror "all of the
+    spool's attributes" without this list needing to be kept in sync with
+    Spoolman's own schema.
+    """
+    ent_reg = er.async_get(hass)
+    found: dict[str, Any] = {}
+    for entry in er.async_entries_for_device(
+        ent_reg, device_id, include_disabled_entities=False
+    ):
+        if entry.platform != SPOOLMAN_DOMAIN or entry.domain != "sensor":
+            continue
+        state = hass.states.get(entry.entity_id)
+        if state is None:
+            continue
+        for key, value in state.attributes.items():
+            if key in _NON_DATA_ATTR_KEYS:
+                continue
+            if key not in found and value not in (None, ""):
+                found[key] = value
     return found
 
 

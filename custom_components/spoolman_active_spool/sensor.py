@@ -18,7 +18,7 @@ custom extra field) shows up.
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -37,8 +37,8 @@ from .spoolman_registry import (
     find_spool_device,
     printer_device_identifier,
     printer_object_id,
+    spool_all_attrs,
     spool_entity_picture,
-    spool_meta_attrs,
     spool_source_entities,
 )
 from .webhook_hub import webhook_full_url
@@ -165,7 +165,11 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
     @callback
     def _handle_source_event(self, event: Event[EventStateChangedData]) -> None:
         """Called whenever the source entity's own value changes."""
-        self._apply_source_state(event.data["new_state"], self._id_picture_override())
+        self._apply_source_state(
+            event.data["new_state"],
+            self._id_picture_override(),
+            self._id_meta_attrs_override(),
+        )
 
     def _id_picture_override(self) -> str | None:
         """For the primary "Aktivní cívka" mirror (suffix "id"), the colour
@@ -184,6 +188,23 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
         if device is None:
             return None
         return spool_entity_picture(self._hass, device.id)
+
+    def _id_meta_attrs_override(self) -> dict[str, Any]:
+        """For the primary "Aktivní cívka" mirror (suffix "id"), every
+        attribute Spoolman's own integration exposes for the active spool -
+        material, vendor, colour, weight, price, lot number, comment,
+        whatever it has (see spool_all_attrs() in spoolman_registry.py) -
+        onto this sensor's own attributes, so it's usable standalone
+        without having to look up the spool's own device."""
+        if self._suffix != "id":
+            return {}
+        spool_id = self.coordinator.data.get("spool_id") if self.coordinator.data else None
+        if spool_id is None:
+            return {}
+        device = find_spool_device(self._dev_reg, spool_id)
+        if device is None:
+            return {}
+        return spool_all_attrs(self._hass, device.id)
 
     def _resync(self) -> None:
         """Point this mirror at the right source entity for the active spool."""
@@ -212,10 +233,15 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
             if new_source_entity_id
             else None
         )
-        self._apply_source_state(state, self._id_picture_override())
+        self._apply_source_state(
+            state, self._id_picture_override(), self._id_meta_attrs_override()
+        )
 
     def _apply_source_state(
-        self, state: State | None, picture_override: str | None = None
+        self,
+        state: State | None,
+        picture_override: str | None = None,
+        meta_attrs_override: dict[str, Any] | None = None,
     ) -> None:
         if state is None or state.state in ("unknown", "unavailable"):
             self._attr_native_value = None
@@ -235,6 +261,9 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
         # for the active spool, regardless of what the line above found.
         if picture_override:
             self._attr_entity_picture = picture_override
+        # For the "id" mirror only: material/vendor/name/colour, copied from
+        # the spool's own device straight onto this sensor's attributes.
+        self._attr_extra_state_attributes = meta_attrs_override or {}
         if self.hass is not None:
             self.async_write_ha_state()
 
@@ -299,13 +328,7 @@ class LaneSpoolSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
             self._attr_native_value = spool_id
             device = find_spool_device(self._dev_reg, spool_id)
             if device is not None:
-                meta = spool_meta_attrs(self._hass, device.id)
-                self._attr_extra_state_attributes = {
-                    "material": meta.get("filament_material"),
-                    "vendor": meta.get("filament_vendor_name"),
-                    "name": meta.get("filament_name"),
-                    "color_hex": meta.get("filament_color_hex"),
-                }
+                self._attr_extra_state_attributes = spool_all_attrs(self._hass, device.id)
                 self._attr_entity_picture = spool_entity_picture(self._hass, device.id)
             else:
                 self._attr_extra_state_attributes = {}
