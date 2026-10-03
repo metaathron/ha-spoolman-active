@@ -27,8 +27,10 @@ from .const import (
     DOMAIN,
 )
 from .moonraker import (
+    async_detect_tool_count,
     async_get_afc_lane_spool_ids,
     async_get_spoolman_status,
+    async_get_tool_status,
     async_list_afc_lanes,
 )
 
@@ -59,6 +61,12 @@ class ActiveSpoolCoordinator(DataUpdateCoordinator[dict]):
         # integration behaves differently until this is non-empty.
         self.lanes: list[str] = []
         self._lanes_detected = False
+        # Same one-time-detection idea as lanes above, but for Snapmaker's
+        # own per-toolhead spool data (print_task_config) - most printers
+        # have exactly one toolhead, so tool_count stays 1 and nothing
+        # about this runs for them.
+        self.tool_count: int = 1
+        self._tool_count_detected = False
         _LOGGER.debug(
             "Spoolman Active Spool (%s): polling every %s s",
             entry.title,
@@ -76,6 +84,19 @@ class ActiveSpoolCoordinator(DataUpdateCoordinator[dict]):
                     "Spoolman Active Spool (%s): detected AFC lanes: %s",
                     self.entry.title,
                     ", ".join(self.lanes),
+                )
+
+        if not self._tool_count_detected:
+            self.tool_count = await async_detect_tool_count(
+                self.hass, self.moonraker_url, self.verify_ssl, self.api_key
+            )
+            self._tool_count_detected = True
+            if self.tool_count > 1:
+                _LOGGER.info(
+                    "Spoolman Active Spool (%s): detected %d toolheads with "
+                    "per-tool spool data (print_task_config)",
+                    self.entry.title,
+                    self.tool_count,
                 )
 
         try:
@@ -112,14 +133,35 @@ class ActiveSpoolCoordinator(DataUpdateCoordinator[dict]):
                     self.data.get("lane_spool_ids", {}) if self.data else {}
                 )
 
+        tool_status: dict[int, dict] = {}
+        if self.tool_count > 1:
+            try:
+                tool_status = await async_get_tool_status(
+                    self.hass,
+                    self.moonraker_url,
+                    self.verify_ssl,
+                    self.tool_count,
+                    self.api_key,
+                )
+            except (aiohttp.ClientError, TimeoutError) as err:
+                _LOGGER.debug(
+                    "Spoolman Active Spool (%s): tool status request failed (%s), "
+                    "keeping last known tool data",
+                    self.entry.title,
+                    err,
+                )
+                tool_status = self.data.get("tool_status", {}) if self.data else {}
+
         _LOGGER.debug(
-            "Spoolman Active Spool (%s): polled status, spool_id=%s, lanes=%s",
+            "Spoolman Active Spool (%s): polled status, spool_id=%s, lanes=%s, tools=%s",
             self.entry.title,
             status.get("spool_id"),
             lane_spool_ids,
+            tool_status,
         )
         return {
             "spool_id": status.get("spool_id"),
             "spoolman_connected": status.get("spoolman_connected"),
             "lane_spool_ids": lane_spool_ids,
+            "tool_status": tool_status,
         }

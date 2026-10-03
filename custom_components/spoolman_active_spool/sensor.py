@@ -38,6 +38,7 @@ from .spoolman_registry import (
     find_spool_device,
     printer_device_identifier,
     printer_object_id,
+    printer_tool_device_identifier,
     spool_all_attrs,
     spool_entity_picture,
     spool_source_entities,
@@ -47,8 +48,11 @@ from .webhook_hub import webhook_full_url
 _LOGGER = logging.getLogger(__name__)
 
 
-def _mirror_object_id(printer_name: str, suffix: str) -> str:
-    base = f"spoolman_active_{printer_object_id(printer_name)}_spool"
+def _mirror_object_id(printer_name: str, suffix: str, tool: int | None = None) -> str:
+    base = f"spoolman_active_{printer_object_id(printer_name)}"
+    if tool is not None:
+        base += f"_tool_{tool}"
+    base += "_spool"
     return base if suffix == "id" else f"{base}_{suffix}"
 
 
@@ -89,11 +93,26 @@ async def async_setup_entry(
     ]
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
-    known_suffixes: set[str] = set()
+    # One known_suffixes set per mirrored context - the main printer
+    # (tool=None) plus one per toolhead, each tracked separately since
+    # they can have a different spool (and therefore reveal new suffixes)
+    # loaded at different times.
+    known_suffixes: dict[int | None, set[str]] = {None: set()}
+    if coordinator.tool_count > 1:
+        for tool in range(coordinator.tool_count):
+            known_suffixes[tool] = set()
 
-    def _create_new_mirrors() -> None:
-        """Add a MirrorSensor for any suffix we haven't seen before."""
-        spool_id = coordinator.data.get("spool_id") if coordinator.data else None
+    def _current_spool_id(tool: int | None) -> int | None:
+        if not coordinator.data:
+            return None
+        if tool is None:
+            return coordinator.data.get("spool_id")
+        return coordinator.data.get("tool_status", {}).get(tool, {}).get("spool_id")
+
+    def _create_new_mirrors(tool: int | None) -> None:
+        """Add a MirrorSensor for any suffix we haven't seen before, for
+        this context (the main printer, or one specific toolhead)."""
+        spool_id = _current_spool_id(tool)
         if spool_id is None:
             return
         device = find_spool_device(dev_reg, spool_id)
@@ -102,22 +121,26 @@ async def async_setup_entry(
 
         new_entities = []
         for source in spool_source_entities(ent_reg, device.id, spool_id):
-            if source.suffix in known_suffixes:
+            if source.suffix in known_suffixes[tool]:
                 continue
-            known_suffixes.add(source.suffix)
+            known_suffixes[tool].add(source.suffix)
             new_entities.append(
-                MirrorSensor(hass, entry, coordinator, dev_reg, ent_reg, source.suffix)
+                MirrorSensor(
+                    hass, entry, coordinator, dev_reg, ent_reg, source.suffix, tool=tool
+                )
             )
         if new_entities:
             _LOGGER.debug(
-                "Spoolman Active Spool (%s): adding %d new mirror sensor(s): %s",
+                "Spoolman Active Spool (%s)%s: adding %d new mirror sensor(s): %s",
                 entry.title,
+                f" tool {tool}" if tool is not None else "",
                 len(new_entities),
                 [e._suffix for e in new_entities],  # noqa: SLF001
             )
             async_add_entities(new_entities)
 
-    _create_new_mirrors()
+    for tool in known_suffixes:
+        _create_new_mirrors(tool)
 
     if coordinator.lanes:
         async_add_entities(
@@ -127,7 +150,8 @@ async def async_setup_entry(
 
     @callback
     def _handle_coordinator_update() -> None:
-        _create_new_mirrors()
+        for tool in known_suffixes:
+            _create_new_mirrors(tool)
 
     entry.async_on_unload(coordinator.async_add_listener(_handle_coordinator_update))
 
@@ -145,24 +169,37 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
         dev_reg: dr.DeviceRegistry,
         ent_reg: er.EntityRegistry,
         suffix: str,
+        tool: int | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._hass = hass
         self._dev_reg = dev_reg
         self._ent_reg = ent_reg
         self._suffix = suffix
+        self._tool = tool
         self._source_entity_id: str | None = None
         self._unsub_state: Callable[[], None] | None = None
 
-        self._attr_unique_id = f"{entry.entry_id}_active_spool_{suffix}"
-        self._attr_name = _friendly_name(suffix)
-        self.entity_id = f"sensor.{_mirror_object_id(entry.title, suffix)}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={printer_device_identifier(entry.entry_id)},
-            name=entry.title,
-            manufacturer="Spoolman Active Spool (Moonraker)",
-            model="Tiskárna",
-        )
+        if tool is None:
+            self._attr_unique_id = f"{entry.entry_id}_active_spool_{suffix}"
+            self._attr_name = _friendly_name(suffix)
+            self._attr_device_info = DeviceInfo(
+                identifiers={printer_device_identifier(entry.entry_id)},
+                name=entry.title,
+                manufacturer="Spoolman Active Spool (Moonraker)",
+                model="Tiskárna",
+            )
+        else:
+            self._attr_unique_id = f"{entry.entry_id}_tool_{tool}_active_spool_{suffix}"
+            self._attr_name = f"{_friendly_name(suffix)} (Tool {tool})"
+            self._attr_device_info = DeviceInfo(
+                identifiers={printer_tool_device_identifier(entry.entry_id, tool)},
+                name=f"{entry.title} - Tool {tool}",
+                manufacturer="Spoolman Active Spool (Moonraker)",
+                model="Tool",
+                via_device=printer_device_identifier(entry.entry_id),
+            )
+        self.entity_id = f"sensor.{_mirror_object_id(entry.title, suffix, tool)}"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -188,17 +225,28 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
             self._id_meta_attrs_override(),
         )
 
+    def _current_spool_id(self) -> int | None:
+        """The spool this mirror currently tracks - the printer's active
+        spool (tool=None), or one specific toolhead's loaded spool."""
+        if not self.coordinator.data:
+            return None
+        if self._tool is None:
+            return self.coordinator.data.get("spool_id")
+        return self.coordinator.data.get("tool_status", {}).get(self._tool, {}).get(
+            "spool_id"
+        )
+
     def _id_picture_override(self) -> str | None:
-        """For the primary "Aktivní cívka" mirror (suffix "id"), the colour
-        swatch/photo Spoolman generated for the active spool - scanned the
-        same robust way spool_entity_picture() always has, rather than
-        trusting whichever single source entity this mirror happens to be
-        pointed at (material/vendor/colour aren't their own suffixed
-        entities - see spool_meta_attrs() in spoolman_registry.py - and
-        picture support is no different)."""
+        """For the primary "Aktivní cívka"/"Cívka (Tool n)" mirror (suffix
+        "id"), the colour swatch/photo Spoolman generated for this spool -
+        scanned the same robust way spool_entity_picture() always has,
+        rather than trusting whichever single source entity this mirror
+        happens to be pointed at (material/vendor/colour aren't their own
+        suffixed entities - see spool_meta_attrs() in spoolman_registry.py
+        - and picture support is no different)."""
         if self._suffix != "id":
             return None
-        spool_id = self.coordinator.data.get("spool_id") if self.coordinator.data else None
+        spool_id = self._current_spool_id()
         if spool_id is None:
             return None
         device = find_spool_device(self._dev_reg, spool_id)
@@ -207,15 +255,16 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
         return spool_entity_picture(self._hass, device.id)
 
     def _id_meta_attrs_override(self) -> dict[str, Any]:
-        """For the primary "Aktivní cívka" mirror (suffix "id"), every
-        attribute Spoolman's own integration exposes for the active spool -
-        material, vendor, colour, weight, price, lot number, comment,
-        whatever it has (see spool_all_attrs() in spoolman_registry.py) -
-        onto this sensor's own attributes, so it's usable standalone
-        without having to look up the spool's own device."""
+        """For the primary "Aktivní cívka"/"Cívka (Tool n)" mirror (suffix
+        "id"), every attribute Spoolman's own integration exposes for this
+        spool - material, vendor, colour, weight, price, lot number,
+        comment, whatever it has (see spool_all_attrs() in
+        spoolman_registry.py) - onto this sensor's own attributes, so it's
+        usable standalone without having to look up the spool's own
+        device."""
         if self._suffix != "id":
             return {}
-        spool_id = self.coordinator.data.get("spool_id") if self.coordinator.data else None
+        spool_id = self._current_spool_id()
         if spool_id is None:
             return {}
         device = find_spool_device(self._dev_reg, spool_id)
@@ -224,8 +273,8 @@ class MirrorSensor(CoordinatorEntity[ActiveSpoolCoordinator], SensorEntity):
         return spool_all_attrs(self._hass, device.id)
 
     def _resync(self) -> None:
-        """Point this mirror at the right source entity for the active spool."""
-        spool_id = self.coordinator.data.get("spool_id") if self.coordinator.data else None
+        """Point this mirror at the right source entity for this spool."""
+        spool_id = self._current_spool_id()
         new_source_entity_id: str | None = None
         if spool_id is not None:
             device = find_spool_device(self._dev_reg, spool_id)

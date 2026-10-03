@@ -22,7 +22,12 @@ from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_HUB, ENTRY_TYPE_PRINTER
 from .coordinator import ActiveSpoolCoordinator
 from .webhook_hub import async_register_spool_show_view, async_register_webhook
 
-PLATFORMS_PRINTER: list[Platform] = [Platform.BUTTON, Platform.SENSOR, Platform.SELECT]
+PLATFORMS_PRINTER: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SENSOR,
+    Platform.SELECT,
+]
 PLATFORMS_HUB: list[Platform] = [Platform.IMAGE, Platform.SENSOR]
 
 

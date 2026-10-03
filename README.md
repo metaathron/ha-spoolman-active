@@ -68,12 +68,17 @@ identifies it in webhook URLs.
 
 #### Multi-extruder printers (AFC lanes)
 
-Printers exposing Klipper "AFC_lane" status objects - as a 4-extruder
-[Snapmaker U1](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware)
-running the community Extended Firmware's AFC-Lite/SpoolLink stub does, one
-lane per extruder (`E0`-`E3`) - are **auto-detected**, no setting to turn
-on. Nothing to configure and nothing changes for ordinary single-extruder
-printers, which simply have no such objects.
+Printers exposing Klipper "AFC_lane" status objects - as the real
+[AFC-Klipper-Add-On](https://github.com/ArmoredTurtle/AFC-Klipper-Add-On)
+does, one lane per extruder (`E0`-`E3`) - are **auto-detected**, no setting
+to turn on. Nothing to configure and nothing changes for ordinary
+single-extruder printers, which simply have no such objects.
+
+Note: despite early documentation suggesting otherwise, a stock Snapmaker
+U1 (even on the Extended Firmware, with "Spoolman Integration" enabled in
+Fluidd/Mainsail) does **not** expose `AFC_lane`/`SET_SPOOL_ID` - confirmed
+against a real printer. It uses a different, Snapmaker-specific mechanism
+instead - see "Snapmaker U1 toolheads" below.
 
 For each detected lane, on top of the printer-wide entities above, you get:
 
@@ -91,6 +96,34 @@ run `SET_SPOOL_ID LANE=<lane> SPOOL_ID=<id>` (`0` to clear) - the
 AFC-Lite/SpoolLink macro, since stock Moonraker has no per-tool equivalent
 of `/server/spoolman/spool_id` yet. Reading a lane's current spool queries
 Moonraker's generic `AFC_lane <name>` printer object.
+
+#### Snapmaker U1 toolheads (read-only, `Tool <n>` devices)
+
+Independent of AFC lanes above: printers exposing Klipper's standard
+`extruder`, `extruder1`, `extruder2`, ... objects for **more than one**
+toolhead, *and* Snapmaker's own (non-standard) `print_task_config` object -
+confirmed on a Snapmaker U1 running the Extended Firmware - are also
+**auto-detected**. A printer with just one toolhead never gets any of
+this; nothing to configure.
+
+For each real toolhead, a separate `"<printer> - Tool <n>"` device is
+created (shown nested under the main printer device), holding:
+
+- `sensor.spoolman_active_<printer>_tool_<n>_spool` and
+  `sensor.spoolman_active_<printer>_tool_<n>_spool_<suffix>` - the same
+  per-attribute mirror set as the printer-wide sensors described below,
+  but for whichever spool Snapmaker's `print_task_config.filament_spool_id`
+  reports as loaded in that toolhead.
+- `binary_sensor.spoolman_active_<printer>_tool_<n>_filament_loaded` -
+  whether filament is actually fed through to that toolhead's nozzle right
+  now, from Snapmaker's `filament_feed left`/`filament_feed right` objects
+  (`channel_state == "load_finish"` - not just detected in the feeder,
+  which goes true earlier).
+
+This is currently **read-only**. Snapmaker's firmware doesn't expose a
+known way to *write* a spool assignment back per toolhead (unlike AFC
+lanes' `SET_SPOOL_ID` macro above), so there's no select/button here -
+just visibility of what's actually loaded where.
 
 ### QR links (webhook hub)
 
@@ -220,11 +253,15 @@ use those otherwise side-effecting links.
   links hub.
 - For [multi-extruder AFC lane support](#multi-extruder-printers-afc-lanes)
   specifically: a Klipper setup exposing `AFC_lane <name>` printer objects
-  and the `SET_SPOOL_ID` gcode macro - as provided by the community
-  [SnapmakerU1-Extended-Firmware](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware)'s
-  AFC-Lite/SpoolLink stub on a Snapmaker U1, or the real
-  [AFC-Klipper-Add-On](https://github.com/ArmoredTurtle/AFC-Klipper-Add-On)
-  elsewhere. Printers without either simply have no lanes detected.
+  and the `SET_SPOOL_ID` gcode macro - the real
+  [AFC-Klipper-Add-On](https://github.com/ArmoredTurtle/AFC-Klipper-Add-On).
+  Printers without it simply have no lanes detected (this does **not**
+  include a stock Snapmaker U1 - see below).
+- For [Snapmaker U1 toolhead support](#snapmaker-u1-toolheads-read-only-tool-n-devices)
+  specifically: Snapmaker's own (non-standard, Extended-Firmware-only)
+  `print_task_config` and `filament_feed left`/`filament_feed right`
+  printer objects. Read-only - no known way yet to write a spool
+  assignment back per toolhead.
 
 ---
 
@@ -271,6 +308,12 @@ each lane additionally gets its own
 one `button.spoolman_spool_<spool_id>_set_active_<printer>_<lane>` per lane
 (instead of a single per-printer button).
 
+For printers with [Snapmaker U1 toolheads](#snapmaker-u1-toolheads-read-only-tool-n-devices)
+detected, each toolhead gets its own `"<printer> - Tool <n>"` device with
+`sensor.spoolman_active_<printer>_tool_<n>_spool[_<suffix>]` (same mirror
+set as above) and `binary_sensor.spoolman_active_<printer>_tool_<n>_filament_loaded`
+- read-only, no select/button.
+
 The QR links hub creates:
 
 - `sensor.spoolman_qr_webhook_url` - diagnostic sensor showing the base
@@ -306,11 +349,14 @@ The QR links hub creates:
   quick, short-timeout check against that printer's Moonraker) if it can't
   currently be reached - informational only, the button stays clickable
   either way.
-- Multi-extruder printers exposing Klipper AFC lane status (e.g. a
-  4-extruder Snapmaker U1) are auto-detected - one full set of
-  active-spool entities per lane, and the QR/webhook picker gains a
-  "which lane" step - with zero effect on ordinary single-extruder
-  printers.
+- Multi-extruder printers exposing Klipper AFC lane status are
+  auto-detected - one full set of active-spool entities per lane, and the
+  QR/webhook picker gains a "which lane" step - with zero effect on
+  ordinary single-extruder printers.
+- Snapmaker U1 toolheads are separately auto-detected via Snapmaker's own
+  `print_task_config`/`filament_feed` objects - one read-only `Tool <n>`
+  device per toolhead, showing which spool is loaded and whether filament
+  actually reaches the nozzle.
 
 ## Notes
 

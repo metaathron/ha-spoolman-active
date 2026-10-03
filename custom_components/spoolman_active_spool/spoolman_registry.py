@@ -71,17 +71,24 @@ class SpoolSourceEntity:
 def spool_source_entities(
     ent_reg: er.EntityRegistry, device_id: str, spool_id: int
 ) -> list[SpoolSourceEntity]:
-    """List every sensor entity Spoolman created for one spool device."""
-    marker = f"_spool_{spool_id}_"
+    """List every sensor entity Spoolman created for one spool device.
+
+    Matched by *entity_id* (e.g. "sensor.spoolman_spool_7_bed_temp"), not
+    unique_id - Spoolman's unique_id format doesn't actually follow the
+    same "..._spool_<id>_<suffix>" shape its entity_id does, so matching
+    on unique_id silently found nothing.
+    """
+    prefix = f"spoolman_spool_{spool_id}_"
     results: list[SpoolSourceEntity] = []
     for entry in er.async_entries_for_device(
         ent_reg, device_id, include_disabled_entities=False
     ):
         if entry.platform != SPOOLMAN_DOMAIN or entry.domain != "sensor":
             continue
-        if marker not in entry.unique_id:
+        object_id = entry.entity_id.split(".", 1)[-1]
+        if not object_id.startswith(prefix):
             continue
-        suffix = entry.unique_id.split(marker, 1)[1]
+        suffix = object_id[len(prefix):]
         if not suffix:
             continue
         results.append(
@@ -93,12 +100,14 @@ def spool_source_entities(
 
 
 def spool_state_value(hass: HomeAssistant, device_id: str, suffix: str) -> str | None:
-    """Read one *dedicated* "_spool_<id>_<suffix>" sensor's own state.
+    """Read one *dedicated* "spoolman_spool_<id>_<suffix>" sensor's own
+    state (matched by entity_id, same reasoning as spool_source_entities()
+    above).
 
     Only useful for fields Spoolman gives their own sensor entity (e.g.
     "weight", "id"). material/vendor/name/color are NOT among them - they
     are "filament_*" attributes on the spool's main sensor instead (see
-    spool_meta_attrs() below), so its own unique_id has no trailing suffix
+    spool_meta_attrs() below), so its own entity_id has no trailing suffix
     and is invisible to the "_{suffix}" match here.
     """
     ent_reg = er.async_get(hass)
@@ -107,7 +116,7 @@ def spool_state_value(hass: HomeAssistant, device_id: str, suffix: str) -> str |
     ):
         if entry.platform != SPOOLMAN_DOMAIN or entry.domain != "sensor":
             continue
-        if not entry.unique_id.endswith(f"_{suffix}"):
+        if not entry.entity_id.split(".", 1)[-1].endswith(f"_{suffix}"):
             continue
         state = hass.states.get(entry.entity_id)
         if state is not None and state.state not in ("unknown", "unavailable"):
@@ -239,6 +248,16 @@ def printer_device_identifier(entry_id: str) -> tuple[str, str]:
     (a printer's device, or the webhook hub's device).
     """
     return (DOMAIN, entry_id)
+
+
+def printer_tool_device_identifier(entry_id: str, tool: int) -> tuple[str, str]:
+    """Stable identifier for one toolhead's own "<printer> - Tool <n>"
+    device (multi-extruder printers only - see sensor.py's MirrorSensor
+    and binary_sensor.py's ToolFilamentDetectedSensor). Linked back to the
+    main printer device via via_device, same idea as
+    our_spool_device_identifier() below.
+    """
+    return (DOMAIN, f"{entry_id}_tool_{tool}")
 
 
 def our_spool_device_identifier(spool_id: int) -> tuple[str, str]:

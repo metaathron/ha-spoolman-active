@@ -7,6 +7,7 @@ requests the same way (timeout, SSL handling, response unwrapping).
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -163,6 +164,145 @@ async def async_get_afc_lane_spool_ids(
         except (TypeError, ValueError):
             spool_id = None
         result[lane] = spool_id if spool_id else None
+    return result
+
+
+_EXTRUDER_OBJECT_RE = re.compile(r"^extruder(\d*)$")
+
+
+async def async_detect_tool_count(
+    hass: HomeAssistant, moonraker_url: str, verify_ssl: bool, api_key: str | None = None
+) -> int:
+    """How many real toolheads this printer has, and whether it exposes
+    Snapmaker's own "print_task_config" object - the only place this
+    integration has found per-tool spool data (see async_get_tool_status
+    below). Counted from Klipper's standard
+    "extruder", "extruder1", "extruder2", ... printer objects, which scale
+    with real hardware - unlike print_task_config's own arrays, which seem
+    to be a fixed size (32) regardless of how many toolheads actually
+    exist. Returns 1 ("just one toolhead, nothing special to do") unless
+    BOTH more than one extruder object AND print_task_config are present -
+    so a single-extruder printer, and a multi-extruder printer that
+    doesn't expose this Snapmaker-specific object at all, behave
+    identically to before this existed. Never raises - a failed/timed-out
+    check just means "assume one toolhead for now", retried next poll.
+    """
+    session = async_get_clientsession(hass)
+    url = f"{moonraker_url.rstrip('/')}/printer/objects/list"
+    try:
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+            headers=_headers(api_key),
+            **_ssl_kwarg(verify_ssl),
+        ) as response:
+            response.raise_for_status()
+            payload = _unwrap(await response.json())
+    except (aiohttp.ClientError, TimeoutError, OSError) as err:
+        _LOGGER.debug(
+            "Spoolman Active Spool: /printer/objects/list request to %s failed (%s) - "
+            "assuming a single toolhead for now",
+            moonraker_url,
+            err,
+        )
+        return 1
+
+    objects = payload.get("objects", []) if isinstance(payload, dict) else []
+    extruder_count = sum(
+        1 for obj in objects if isinstance(obj, str) and _EXTRUDER_OBJECT_RE.match(obj)
+    )
+    has_print_task_config = "print_task_config" in objects
+    _LOGGER.debug(
+        "Spoolman Active Spool: %s - %d extruder object(s), print_task_config present: %s",
+        moonraker_url,
+        extruder_count,
+        has_print_task_config,
+    )
+    if extruder_count > 1 and has_print_task_config:
+        return extruder_count
+    return 1
+
+
+_FEED_EXTRUDER_RE = re.compile(r"^extruder(\d*)$")
+
+
+async def async_get_tool_status(
+    hass: HomeAssistant,
+    moonraker_url: str,
+    verify_ssl: bool,
+    tool_count: int,
+    api_key: str | None = None,
+) -> dict[int, dict[str, Any]]:
+    """One GET /printer/objects/query covering everything this integration
+    exposes per toolhead, in a single request:
+
+    - print_task_config.filament_spool_id - which Spoolman spool is
+      loaded in each toolhead. That array appears to be a fixed size well
+      beyond any real toolhead count, so it's trimmed here to tool_count
+      (the printer's *actual* number of extruders, from
+      async_detect_tool_count above). 0 means "nothing loaded", same
+      convention as everywhere else in this integration.
+    - "filament_feed left"/"filament_feed right" - whether filament is
+      physically detected in that toolhead right now (filament_detected,
+      already a plain bool) and the raw state machine value
+      (channel_state, e.g. "load_finish"/"wait_insert"). Both objects key
+      their toolheads as "extruder0".."extruder3" regardless of which
+      physical side they're on, so they're merged into one tool-indexed
+      dict here.
+
+    Raises on request failure, same as the other query calls, so the
+    coordinator can fall back to its last known values.
+    """
+    if tool_count <= 1:
+        return {}
+
+    result: dict[int, dict[str, Any]] = {
+        tool: {"spool_id": None, "filament_detected": None, "channel_state": None}
+        for tool in range(tool_count)
+    }
+
+    session = async_get_clientsession(hass)
+    url = (
+        f"{moonraker_url.rstrip('/')}/printer/objects/query"
+        "?print_task_config&filament_feed%20left&filament_feed%20right"
+    )
+    async with session.get(
+        url,
+        timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        headers=_headers(api_key),
+        **_ssl_kwarg(verify_ssl),
+    ) as response:
+        response.raise_for_status()
+        payload = _unwrap(await response.json())
+
+    status = payload.get("status", {}) if isinstance(payload, dict) else {}
+
+    config = status.get("print_task_config", {})
+    raw_spool_ids = config.get("filament_spool_id", []) if isinstance(config, dict) else []
+    for tool in range(tool_count):
+        raw = raw_spool_ids[tool] if tool < len(raw_spool_ids) else None
+        try:
+            spool_id = int(raw) if raw else None
+        except (TypeError, ValueError):
+            spool_id = None
+        result[tool]["spool_id"] = spool_id if spool_id else None
+
+    for feed_key in ("filament_feed left", "filament_feed right"):
+        feed = status.get(feed_key, {})
+        if not isinstance(feed, dict):
+            continue
+        for extruder_key, info in feed.items():
+            if not isinstance(info, dict):
+                continue
+            match = _FEED_EXTRUDER_RE.match(extruder_key)
+            if match is None:
+                continue
+            tool = int(match.group(1) or 0)
+            if tool not in result:
+                continue
+            result[tool]["filament_detected"] = info.get("filament_detected")
+            result[tool]["channel_state"] = info.get("channel_state")
+
     return result
 
 

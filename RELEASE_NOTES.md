@@ -1,3 +1,17 @@
+## v1.6.0
+
+### New
+
+- Snapmaker U1 toolhead support (read-only): real multi-toolhead printers exposing Snapmaker's own `print_task_config` object now get one `"<printer> - Tool <n>"` device per toolhead, each with the full per-attribute spool sensor set (same as the main "Aktivní cívka" sensors) plus a `binary_sensor` showing whether filament is actually fed through to that toolhead's nozzle right now. Single-toolhead printers are unaffected. There is currently no known way to *write* a spool assignment back per toolhead on Snapmaker's firmware, so this is visibility only - no select/button.
+
+### Docs
+
+- README clarifies that a stock Snapmaker U1 does **not** expose `AFC_lane`/`SET_SPOOL_ID` (despite earlier docs suggesting it might) and documents the new Tool N devices as the real, Snapmaker-specific mechanism.
+
+### Upgrading
+
+No action needed. If you have a multi-toolhead Snapmaker U1, reload the integration (or restart Home Assistant) to pick up the new `Tool <n>` devices.
+
 ## v1.5.0
 
 ### New
